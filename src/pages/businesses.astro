@@ -4,7 +4,8 @@ import BusinessCard from '../components/BusinessCard.astro';
 import EmptyState from '../components/EmptyState.astro';
 import Pagination from '../components/Pagination.astro';
 import ServiceNotice from '../components/ServiceNotice.astro';
-import { getSiteChrome, listMerchants, getCategoriesWithCounts, getTowns, PAGE_SIZE } from '../lib/queries';
+import Carousel from '../components/Carousel.astro';
+import { getSiteChrome, listMerchants, getCategoriesWithCounts, getTowns, getCarouselMerchants, PAGE_SIZE } from '../lib/queries';
 import { resolveTownContext, townFilter, withTown } from '../lib/location';
 import { cachePublic, markUnavailable } from '../lib/http';
 import { logDataError } from '../lib/errors';
@@ -17,22 +18,28 @@ const categorySlug = params.get('category') || undefined;
 const query = params.get('q')?.trim() || undefined;
 const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
 
-const { blocks } = await getSiteChrome(Astro.locals);
+const { blocks, settings } = await getSiteChrome(Astro.locals);
 
 let towns: Town[] = [];
 let categories: Array<Category & { deal_count: number; merchant_count: number }> = [];
 let results: Page<Merchant> = { items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pageCount: 1 };
 let townContext = resolveTownContext(Astro.url, Astro.cookies, []);
 let unavailable = false;
+let featured: Merchant[] = [];
+// The featured strip: first page only, and never while searching or filtering.
+const showFeatured = page === 1 && !query && !categorySlug;
 
 try {
   towns = await getTowns(Astro.locals);
   townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
   const townSlug = townFilter(townContext);
+  // Started now so it loads alongside the rest; a failure only hides the strip.
+  const featuredLoad = showFeatured ? getCarouselMerchants(townSlug).catch(() => []) : Promise.resolve([]);
   [categories, results] = await Promise.all([
     getCategoriesWithCounts(townSlug),
     listMerchants({ categorySlug, townSlug, query, page, pageSize: PAGE_SIZE }),
   ]);
+  featured = await featuredLoad;
 } catch (error) {
   logDataError('businesses page', error);
   unavailable = true;
@@ -66,6 +73,11 @@ const buildUrl = (patch: Record<string, string | null>) => {
     { name: 'Businesses', href: '/businesses' },
   ]}
 >
+  {!unavailable && featured.length > 0 && (
+    <Carousel compact merchants={featured} townName={townContext.showingAll ? null : townContext.town?.name ?? null}
+              seconds={Number(settings['carousel.seconds_per_slide'] ?? 8) || 8}
+              autoplay={settings['carousel.autoplay'] !== false} />
+  )}
   {unavailable ? <ServiceNotice /> : (
   <div class="wrap section">
     <header class="page-head">

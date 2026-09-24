@@ -4,10 +4,11 @@ import BusinessCard from '../components/BusinessCard.astro';
 import EmptyState from '../components/EmptyState.astro';
 import Pagination from '../components/Pagination.astro';
 import ServiceNotice from '../components/ServiceNotice.astro';
+import Carousel from '../components/Carousel.astro';
 import { resolveTownContext, townFilter, withTown } from '../lib/location';
 import {
   listBusinessCards, getCategoriesWithCounts, getTowns, getSiteChrome,
-  listMerchantsWithoutLiveDeals, searchEverything, PAGE_SIZE,
+  listMerchantsWithoutLiveDeals, searchEverything, getCarouselMerchants, PAGE_SIZE,
 } from '../lib/queries';
 import { cachePublic, markUnavailable } from '../lib/http';
 import { logDataError } from '../lib/errors';
@@ -26,7 +27,7 @@ const featuredOnly = params.get('featured') === '1';
 const endingSoon = params.get('ending') === '1';
 const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
 
-const { blocks } = await getSiteChrome(Astro.locals);
+const { blocks, settings } = await getSiteChrome(Astro.locals);
 
 let towns: Town[] = [];
 let categories: Array<Category & { deal_count: number }> = [];
@@ -34,6 +35,9 @@ let results: Page<Merchant> = { items: [], total: 0, page: 1, pageSize: PAGE_SIZ
 let quietMerchants: Merchant[] = [];
 let townContext = resolveTownContext(Astro.url, Astro.cookies, []);
 let unavailable = false;
+let featured: Merchant[] = [];
+// The featured strip: first page only, and never while searching or filtering.
+const showFeatured = page === 1 && !query && !categorySlug && !featuredOnly && !endingSoon;
 
 try {
   towns = await getTowns(Astro.locals);
@@ -42,6 +46,8 @@ try {
   // A typed search uses the full search — names, addresses, phone numbers,
   // categories and towns as well as deal text — exactly as live search does,
   // so pressing Search never finds less than typing did.
+  // Started now so it loads alongside the rest; a failure only hides the strip.
+  const featuredLoad = showFeatured ? getCarouselMerchants(townSlug).catch(() => []) : Promise.resolve([]);
   const searched = query && !featuredOnly && !endingSoon && !categorySlug
     ? await searchEverything(query, townSlug, 60)
     : null;
@@ -58,6 +64,7 @@ try {
         ? listMerchantsWithoutLiveDeals({ townSlug, categorySlug })
         : Promise.resolve([]),
   ]);
+  featured = await featuredLoad;
 } catch (error) {
   logDataError('deals page', error);
   unavailable = true;
@@ -114,6 +121,11 @@ const filtersActive = activeFilters.length > 0;
     ...(activeCategory ? [{ name: activeCategory.name, href: `/deals?category=${activeCategory.slug}` }] : []),
   ]}
 >
+  {!unavailable && featured.length > 0 && (
+    <Carousel compact merchants={featured} townName={townContext.showingAll ? null : townContext.town?.name ?? null}
+              seconds={Number(settings['carousel.seconds_per_slide'] ?? 8) || 8}
+              autoplay={settings['carousel.autoplay'] !== false} />
+  )}
   {unavailable ? <ServiceNotice /> : (
   <div class="wrap section">
     <header class="page-head">

@@ -51,6 +51,7 @@ const businessCount = data ? data.cards.length + data.quiet.length : 0;
   }
   canonicalPath={`/${slug}`}
   noindex={unavailable}
+  signupBox={unavailable || !data}
   breadcrumbs={town ? [{ name: 'Home', href: '/' }, { name: town.name, href: `/${town.slug}` }] : []}
 >
   {unavailable || !data ? (

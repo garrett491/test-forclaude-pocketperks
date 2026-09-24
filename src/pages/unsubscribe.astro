@@ -56,7 +56,7 @@ if (Astro.request.method === 'POST') {
 const validToken = UUID.test(token);
 ---
 
-<Base title="Unsubscribe" noindex={true} canonicalPath="/unsubscribe">
+<Base title="Unsubscribe" noindex={true} canonicalPath="/unsubscribe" signupBox={false}>
   <div class="wrap section prose">
     <h1>Unsubscribe</h1>
 

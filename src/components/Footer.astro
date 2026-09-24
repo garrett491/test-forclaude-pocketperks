@@ -1,14 +1,28 @@
 ---
-import type { NavItem, SiteSettings, ContentBlock } from '../lib/types';
+import type { NavItem, SiteSettings, ContentBlock, Town } from '../lib/types';
 import type { Branding } from '../lib/branding';
-import NewsletterForm from './NewsletterForm.astro';
 
-interface Props { nav: NavItem[]; settings: SiteSettings; branding: Branding; blocks?: Record<string, ContentBlock>; }
-const { nav, settings, branding, blocks = {} } = Astro.props;
-// The wording edited under Site content → Newsletter wording.
-const copy = (blocks['home.newsletter']?.payload ?? {}) as Record<string, string>;
+interface Props { nav: NavItem[]; settings: SiteSettings; branding: Branding; blocks?: Record<string, ContentBlock>; towns?: Town[]; }
+const { nav, settings, branding, blocks = {}, towns = [] } = Astro.props;
+const newsletterLabel = 'Get deals by email';
 
-const footerNav = nav.filter((n) => n.location === 'footer');
+/**
+ * Towns are listed from the towns table, so a town added in Settings
+ * appears here by itself. Up to eight, then "All towns". Any hand-made
+ * footer link to a town page is dropped so it is never listed twice.
+ */
+const TOWN_LIMIT = 8;
+const townPaths = new Set(towns.map((t) => `/${t.slug}`));
+const link = (label: string, href: string): NavItem =>
+  ({ location: 'footer', section: 'Browse', label, href, opens_new_tab: false, sort_order: 0 });
+const townLinks: NavItem[] = [...towns]
+  .sort((a, b) => a.name.localeCompare(b.name))
+  .slice(0, TOWN_LIMIT)
+  .map((t) => link(t.name, `/${t.slug}`))
+  .concat(towns.length > 1 ? [link('All towns', '/?town=all')] : []);
+const footerNav = nav
+  .filter((n) => n.location === 'footer' && !(townLinks.length && townPaths.has(n.href)))
+  .concat(townLinks);
 const sections = [...new Set(footerNav.map((n) => n.section ?? 'More'))];
 
 const email = settings['contact.email'] as string | undefined;
@@ -27,7 +41,7 @@ const year = new Date().getFullYear();
         <img src={branding.footerMark} alt={siteName} width="40" height="40" loading="lazy" />
         {tagline && <p class="tagline">{tagline}</p>}
         <div class="social row">
-          {facebook && <a href={facebook} target="_blank" rel="noopener noreferrer">Facebook</a>}
+          {facebook && <a href={facebook} target="_blank" rel="noopener noreferrer">Follow us on Facebook</a>}
           {instagram && <a href={instagram} target="_blank" rel="noopener noreferrer">Instagram</a>}
         </div>
       </div>
@@ -49,10 +63,10 @@ const year = new Date().getFullYear();
         </nav>
       ))}
 
+      {/* The signup form itself sits in an outlined box above the footer
+          on every page; here it is just a link, so no page asks twice. */}
       <div class="footer-signup">
-        <NewsletterForm source="footer" settings={settings} compact={true}
-          headline={copy.headline || undefined} body={copy.body || undefined}
-          ctaLabel={copy.cta_label || undefined} finePrint={copy.fine_print || undefined} />
+        <a class="nl-link" href="/newsletter">{newsletterLabel} <span aria-hidden="true">→</span></a>
       </div>
     </div>
 
@@ -100,4 +114,8 @@ const year = new Date().getFullYear();
   /* Headings default to the ink colour, which was dark on dark green here —
      the newsletter heading in the footer was all but invisible. */
   .site-footer :global(.nl-title) { color: var(--pp-footer-text); }
+  .nl-link {
+    display: inline-flex; align-items: center; min-height: var(--pp-tap-min);
+    font-weight: 700; color: var(--pp-lime-300) !important;
+  }
 </style>

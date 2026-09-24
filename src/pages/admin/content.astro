@@ -284,8 +284,12 @@ const steps = how?.payload?.steps ?? [];
   </section>
 
   <section class="panel">
-    <h2>Newsletter wording</h2>
-    <p class="panel-hint">The email signup at the bottom of every page, and on the signup page.</p>
+    <h2>Newsletter signup</h2>
+    <p class="panel-hint">
+      The outlined email signup box shown once on every page: after the deals on
+      town pages, under the coupons on business pages, and above the footer
+      everywhere else. The footer link and the signup page always stay.
+    </p>
     <form method="post" class="stack">
       <input type="hidden" name="intent" value="block" />
       <input type="hidden" name="block_key" value="home.newsletter" />
@@ -308,8 +312,11 @@ const steps = how?.payload?.steps ?? [];
           <input class="input" id="nl-f" name="payload.fine_print" value={p(newsletter, 'fine_print')} />
         </div>
       </div>
-      <input type="hidden" name="is_active" value="on" />
-      <div class="form-actions"><button class="btn btn-primary" type="submit">Save newsletter wording</button></div>
+      <label class="switch">
+        <input type="checkbox" name="is_active" checked={newsletter?.is_active ?? true} />
+        <span>Show the signup box on every page</span>
+      </label>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Save newsletter signup</button></div>
     </form>
   </section>
 

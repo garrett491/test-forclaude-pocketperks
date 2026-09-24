@@ -12,7 +12,7 @@ interface Props {
   towns: Town[];
   townContext: TownContext;
 }
-const { nav, blocks, branding, towns, townContext } = Astro.props;
+const { nav, settings, blocks, branding, towns, townContext } = Astro.props;
 
 const headerNav = nav.filter((n) => n.location === 'header');
 const path = Astro.url.pathname;
@@ -22,6 +22,11 @@ const announceText = announcement?.payload?.text as string | undefined;
 const announceHref = announcement?.payload?.href as string | undefined;
 
 const showPicker = towns.length > 1;
+const facebook = (settings['social.facebook_url'] as string | undefined) || '';
+
+// The same wording as the town button in the header.
+const { town, showingAll, isDefault } = townContext;
+const townLabel = showingAll ? 'All towns' : isDefault || !town ? 'Pick your town' : town.name;
 ---
 
 {announceText && (
@@ -56,6 +61,15 @@ const showPicker = towns.length > 1;
     </nav>
 
     <div class="header-action">
+      {facebook && (
+        <a class="fb-link" href={facebook} target="_blank" rel="noopener noreferrer"
+           aria-label="Pocket Perks on Facebook (opens in a new tab)">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M13.5 21v-7.5h2.6l.4-3h-3V8.6c0-.9.3-1.5 1.5-1.5h1.6V4.4c-.3 0-1.2-.1-2.3-.1-2.3 0-3.9 1.4-3.9 4v2.2H7.8v3h2.6V21h3.1z"/>
+          </svg>
+          <span class="fb-text">Facebook</span>
+        </a>
+      )}
       {showPicker ? (
         <LocationPicker context={townContext} />
       ) : (
@@ -64,6 +78,37 @@ const showPicker = towns.length > 1;
     </div>
   </div>
 </header>
+
+{/* On a phone the header scrolls away; once it has, this slim bar stays at
+    the top so the town can be changed from anywhere on the page. Shown by
+    site.js only when the header is out of view; never on larger screens,
+    where the whole header already stays put. */}
+{(showPicker || facebook) && (
+  <div class="town-bar" data-town-bar hidden>
+    <div class="wrap town-bar-inner">
+      <a href="/" class="bar-brand" aria-label="Pocket Perks, home">
+        <img src={branding.logo} alt="" width="110" height="25" loading="lazy" />
+      </a>
+      <div class="bar-actions">
+        {facebook && (
+          <a class="fb-link" href={facebook} target="_blank" rel="noopener noreferrer"
+             aria-label="Pocket Perks on Facebook (opens in a new tab)">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M13.5 21v-7.5h2.6l.4-3h-3V8.6c0-.9.3-1.5 1.5-1.5h1.6V4.4c-.3 0-1.2-.1-2.3-.1-2.3 0-3.9 1.4-3.9 4v2.2H7.8v3h2.6V21h3.1z"/>
+            </svg>
+          </a>
+        )}
+        {showPicker && (
+          <button class="bar-town" type="button" data-town-open aria-label={`Change town. Currently ${townLabel}`}>
+            <span aria-hidden="true">📍</span>
+            <span class="bar-town-label">{townLabel}</span>
+            <span aria-hidden="true" class="bar-caret">▾</span>
+          </button>
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
 <style>
   /* The announcement bar is content, so it is editable and schedulable from
@@ -112,7 +157,46 @@ const showPicker = towns.length > 1;
   }
   .brand { grid-area: brand; display: flex; align-items: center; min-height: var(--pp-tap-min); }
   .brand img { width: auto; height: 30px; max-width: 170px; object-fit: contain; }
-  .header-action { grid-area: action; justify-self: end; min-width: 0; }
+  .header-action {
+    grid-area: action; justify-self: end; min-width: 0;
+    display: flex; align-items: center; gap: var(--pp-space-2);
+  }
+
+  /* Facebook: a small round icon; the word appears only where there is room. */
+  .fb-link {
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--pp-space-1);
+    min-width: 40px; height: 40px; padding-inline: var(--pp-space-2);
+    border-radius: var(--pp-radius-chip);
+    color: #1877F2; background: var(--pp-surface);
+    border: 1px solid var(--pp-line);
+    font-size: var(--pp-text-sm); font-weight: 600; text-decoration: none; flex: none;
+  }
+  .fb-link:hover { border-color: #1877F2; }
+  .fb-text { display: none; color: var(--pp-header-text); }
+  @media (min-width: 64rem) { .header-action .fb-text { display: inline; } }
+
+  /* ---- The slim bar that follows you down the page on a phone ---- */
+  .town-bar {
+    position: fixed; inset: 0 0 auto 0; z-index: 30;
+    background: var(--pp-header-bg);
+    border-bottom: 1px solid var(--pp-line);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+  .town-bar[hidden] { display: none; }
+  @media (min-width: 48rem) { .town-bar { display: none !important; } }
+  .town-bar-inner { display: flex; align-items: center; justify-content: space-between; gap: var(--pp-space-2); min-height: 52px; }
+  .bar-brand { display: flex; align-items: center; min-height: var(--pp-tap-min); }
+  .bar-brand img { height: 24px; width: auto; max-width: 110px; object-fit: contain; }
+  .bar-actions { display: flex; align-items: center; gap: var(--pp-space-2); min-width: 0; }
+  .bar-town {
+    display: inline-flex; align-items: center; gap: var(--pp-space-1);
+    min-height: 40px; padding-inline: var(--pp-space-3);
+    background: var(--pp-action-bg); color: var(--pp-action-text);
+    border: 0; border-radius: var(--pp-radius-chip);
+    font-size: var(--pp-text-sm); font-weight: 700; cursor: pointer; white-space: nowrap; min-width: 0;
+  }
+  .bar-town-label { max-width: 8rem; overflow: hidden; text-overflow: ellipsis; }
+  .bar-caret { font-size: 0.8em; opacity: 0.8; }
 
   nav { grid-area: nav; min-width: 0; }
   .nav-list { display: flex; gap: var(--pp-space-1); flex-wrap: wrap; }
@@ -138,6 +222,8 @@ const showPicker = towns.length > 1;
 
   @media (max-width: 22rem) {
     .brand img { height: 26px; max-width: 110px; }
+    .bar-brand img { max-width: 80px; }
+    .bar-town-label { max-width: 6rem; }
     .nav-list a { padding-inline: var(--pp-space-2); }
   }
 </style>

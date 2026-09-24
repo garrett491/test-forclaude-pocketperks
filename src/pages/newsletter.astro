@@ -21,7 +21,7 @@ const message = MESSAGES[status];
 const copy = (blocks['home.newsletter']?.payload ?? {}) as Record<string, string>;
 ---
 
-<Base title="Email updates" noindex={true} canonicalPath="/newsletter">
+<Base title="Email updates" noindex={true} canonicalPath="/newsletter" signupBox={false}>
   <div class="wrap section nl-page">
     <h1>Email updates</h1>
     {message && (status === 'ok'

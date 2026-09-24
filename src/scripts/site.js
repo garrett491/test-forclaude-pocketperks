@@ -613,6 +613,25 @@ function rememberTown(slug) {
  * search result and then taps Home should land back in Malvern, not be
  * asked again or shown a different town.
  */
+/**
+ * On a phone the header scrolls away with the page. Once it is out of
+ * view, a slim bar with the town button (and Facebook) stays at the top.
+ * On larger screens the header itself stays put, so it never leaves view
+ * and this bar never appears.
+ */
+function initTownBar() {
+  const bar = document.querySelector('[data-town-bar]');
+  const header = document.querySelector('.site-header');
+  if (!bar || !header || !('IntersectionObserver' in window)) return;
+  const observer = new IntersectionObserver(([entry]) => {
+    const show = !entry.isIntersecting;
+    bar.hidden = !show;
+    // Keep anything reached with Tab clear of the bar (WCAG 2.4.11).
+    document.documentElement.classList.toggle('has-town-bar', show);
+  });
+  observer.observe(header);
+}
+
 function initRememberTown() {
   const marker = document.querySelector('[data-remember-town]');
   if (marker && marker.dataset.townSlug) rememberTown(marker.dataset.townSlug);
@@ -924,6 +943,7 @@ function initSearchTracking() {
   ['image fallbacks', () => initImageFallbacks()],
   ['page views', initPageViews],
   ['remember town', initRememberTown],
+  ['town bar', initTownBar],
   ['town picker', initTownPicker],
   ['grid search', initGridSearch],
   ['suggestions', initSuggestSearch],

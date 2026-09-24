@@ -5,6 +5,7 @@ import BusinessCard from '../../../components/BusinessCard.astro';
 import Gallery from '../../../components/Gallery.astro';
 import MediaFrame from '../../../components/MediaFrame.astro';
 import EmptyState from '../../../components/EmptyState.astro';
+import SignupBox from '../../../components/SignupBox.astro';
 import ServiceNotice from '../../../components/ServiceNotice.astro';
 import { getMerchant, getRelatedMerchants, getSiteChrome } from '../../../lib/queries';
 import { cachePublic, markUnavailable } from '../../../lib/http';
@@ -118,6 +119,7 @@ const place = merchant?.town ? ` in ${merchant.town.name}, ${merchant.town.state
     `${merchant.name}${place}. ${deals.length ? `${deals.length} current ${deals.length === 1 ? 'offer' : 'offers'}, hours, phone and directions.` : 'Hours, phone and directions.'}`
   ) : undefined}
   canonicalPath={`/b/${slug}`}
+  signupBox={!merchant}
   ogImage={imageUrl(cover ?? merchant?.logo)}
   noindex={unavailable}
   schema={localBusiness ? [localBusiness] : []}
@@ -207,6 +209,8 @@ const place = merchant?.town ? ` in ${merchant.town.name}, ${merchant.town.state
                         ctaLabel="" ctaHref="" />
           )}
         </section>
+
+        <div class="signup-under-deals"><SignupBox source="business-page" /></div>
 
         {/* Photos supplied by the business, not scraped. After the deals,
             because someone landing here came for an offer first. */}
@@ -298,6 +302,7 @@ const place = merchant?.town ? ` in ${merchant.town.name}, ${merchant.town.state
 </Base>
 
 <style>
+  .signup-under-deals { margin-block: var(--pp-space-6); }
   .cover { background: var(--pp-frame); border-bottom: 1px solid var(--pp-line); }
   .cover :global(.mf-fit) { --mf-max: min(62vh, 28rem); --mf-min: 9rem; max-width: 1180px; margin-inline: auto; }
 

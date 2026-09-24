@@ -53,6 +53,7 @@ const title = (settings['seo.default_title'] as string) || 'Pocket Perks — Loc
   title={title}
   description={settings['seo.default_description'] as string}
   canonicalPath="/"
+  signupBox={unavailable || choosing || !data}
 >
   {unavailable ? (
     <ServiceNotice />

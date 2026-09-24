@@ -1,0 +1,41 @@
+---
+import NewsletterForm from './NewsletterForm.astro';
+import { getSiteChrome } from '../lib/queries';
+
+/**
+ * The email signup, in a clearly outlined box. One per page: the layout
+ * puts it above the footer unless the page has placed it somewhere better
+ * (after the deals on a town page, under the coupons on a business page).
+ *
+ * Switched on and off with "Show the signup box" under Site content →
+ * Newsletter wording. Switched off, that content block is hidden from the
+ * public, so this renders nothing and the footer link remains.
+ */
+interface Props {
+  /** Recorded with each signup, so you can see which spot works. */
+  source: string;
+}
+const { source } = Astro.props;
+const { settings, blocks } = await getSiteChrome(Astro.locals);
+const block = blocks['home.newsletter'];
+if (!block) return;
+const copy = (block.payload ?? {}) as Record<string, string>;
+---
+
+<div class="signup-box">
+  <NewsletterForm source={source} settings={settings}
+    headline={copy.headline || undefined} body={copy.body || undefined}
+    ctaLabel={copy.cta_label || undefined} finePrint={copy.fine_print || undefined} />
+</div>
+
+<style>
+  .signup-box {
+    max-width: 44rem;
+    margin-inline: auto;
+    padding: var(--pp-space-4) var(--pp-space-5);
+    background: var(--pp-surface);
+    border: 2px solid var(--pp-green);
+    border-radius: var(--pp-radius-card);
+  }
+  @media (max-width: 30rem) { .signup-box { padding: var(--pp-space-4); } }
+</style>

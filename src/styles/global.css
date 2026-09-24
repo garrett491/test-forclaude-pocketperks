@@ -67,6 +67,9 @@ ul, ol { margin: 0; padding: 0; }
   clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
+/* While the phone town bar is showing, scroll targets and focus stop below it. */
+html.has-town-bar { scroll-padding-top: 64px; }
+
 .skip-link {
   /* Moved up by its own height, so it hides fully at any text size. */
   position: absolute; left: var(--pp-space-3); top: 0; transform: translateY(-110%);

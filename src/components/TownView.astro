@@ -4,6 +4,7 @@ import type { TownPageData } from '../lib/queries';
 import Carousel from './Carousel.astro';
 import BusinessCard from './BusinessCard.astro';
 import EmptyState from './EmptyState.astro';
+import SignupBox from './SignupBox.astro';
 
 /**
  * A town's front page: what is on offer here, best first.
@@ -31,6 +32,7 @@ const place = town ? town.name : 'every town';
 const townParam = town ? `town=${town.slug}` : 'town=all';
 const carouselSeconds = Number(settings['carousel.seconds_per_slide'] ?? 8) || 8;
 const carouselAutoplay = settings['carousel.autoplay'] !== false;
+const facebook = (settings['social.facebook_url'] as string | undefined) || '';
 const how = blocks['home.how_it_works']?.payload as { steps?: { title: string; body: string }[] } | undefined;
 
 const businessCount = data.cards.length + data.quiet.length;
@@ -68,6 +70,13 @@ const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from
     </div>
 
     {data.dealCount > 0 && <p class="town-stats">{stats}</p>}
+    {facebook && (
+      <p class="town-social">
+        <a href={facebook} target="_blank" rel="noopener noreferrer">
+          New deals first on Facebook: <strong>follow Pocket Perks</strong><span class="sr-only"> (opens in a new tab)</span>
+        </a>
+      </p>
+    )}
   </div>
 </section>
 
@@ -143,8 +152,10 @@ const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from
   </section>
 )}
 
-{/* The email signup lives in the footer, directly below. A second copy
-    here put two identical asks a scroll apart. */}
+{/* Right after the deals, where someone who liked what they saw is. */}
+<div class="wrap signup-after-deals">
+  <SignupBox source="town-page" />
+</div>
 
 <style>
   .town-hero { background: var(--pp-deep); color: var(--pp-white); }
@@ -175,11 +186,15 @@ const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from
     color: rgba(255, 255, 255, 0.82); font-variant-numeric: tabular-nums;
   }
   .town-hero :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+  .town-social { margin: var(--pp-space-2) 0 0; font-size: var(--pp-text-sm); }
+  .town-social a { color: rgba(255, 255, 255, 0.9); display: inline-block; padding-block: 0.7rem; line-height: 1.4; }
+  .town-social strong { color: var(--pp-lime-300); margin-left: 0.3em; text-decoration: underline; }
 
   .cat-row { margin-bottom: var(--pp-space-5); }
   .block + .block { margin-top: var(--pp-space-7); }
   .quiet-note { color: var(--pp-muted); font-size: var(--pp-text-sm); margin: calc(-1 * var(--pp-space-2)) 0 var(--pp-space-4); }
 
+  .signup-after-deals { padding-bottom: var(--pp-space-7); }
   .how { background: var(--pp-surface); border-block: 1px solid var(--pp-line); padding-block: var(--pp-space-7); }
   .how h2 { margin-bottom: var(--pp-space-5); }
   .how-steps { display: grid; gap: var(--pp-space-5); grid-template-columns: 1fr; }

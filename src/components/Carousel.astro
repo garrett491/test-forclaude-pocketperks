@@ -26,15 +26,21 @@ interface Props {
   /** Seconds for one card to pass. Set in admin Settings. */
   seconds?: number;
   autoplay?: boolean;
+  /**
+   * A slim strip for the Deals and Businesses pages: a small picture, the
+   * name and how many deals. Only the look of each card changes; the
+   * movement, pause, arrows and swipe are the same script as the homepage.
+   */
+  compact?: boolean;
 }
 
-const { merchants, townName, seconds = 8, autoplay = true } = Astro.props;
+const { merchants, townName, seconds = 8, autoplay = true, compact = false } = Astro.props;
 if (!merchants.length) return;
 
 const title = `Featured businesses${townName ? ` in ${townName}` : ''}`;
 ---
 
-<section class="carousel" aria-labelledby="carousel-title" aria-roledescription="carousel"
+<section class:list={['carousel', { 'is-compact': compact }]} aria-labelledby="carousel-title" aria-roledescription="carousel"
          data-carousel data-seconds={String(seconds)} data-autoplay={String(autoplay)}>
   <div class="wrap">
     <h2 id="carousel-title" class="carousel-title">{title}</h2>
@@ -42,7 +48,28 @@ const title = `Featured businesses${townName ? ` in ${townName}` : ''}`;
 
   <div class="track-wrap" data-carousel-viewport>
     <ul class="track list-plain" data-carousel-track>
-      {merchants.map((merchant, index) => {
+      {compact ? merchants.map((merchant, index) => {
+        const count = merchant.deals?.length ?? 0;
+        const thumb = merchant.logo ?? merchant.cover ?? null;
+        return (
+          <li class="slide" data-slide aria-roledescription="slide"
+              aria-label={`${index + 1} of ${merchants.length}: ${merchant.name}`}>
+            <a class="slide-link" href={`/b/${merchant.slug}`} draggable="false">
+              <MediaFrame
+                asset={thumb} mode="box" ratio={1} kind={merchant.logo ? 'logo' : 'photo'}
+                alt="" name={merchant.name} width={160} sizes="64px" class="slide-thumb"
+              />
+              <span class="slide-text">
+                <span class="slide-merchant">{merchant.name}</span>
+                <span class="slide-count">
+                  {count > 0 ? `${count} ${count === 1 ? 'deal' : 'deals'}` : 'See what they offer'}
+                  <span aria-hidden="true"> →</span>
+                </span>
+              </span>
+            </a>
+          </li>
+        );
+      }) : merchants.map((merchant, index) => {
         const { shown, more } = cardDeals(merchant.deals);
         const top = shown[0];
         const art = merchant.cover ?? merchant.logo ?? null;
@@ -189,4 +216,24 @@ const title = `Featured businesses${townName ? ` in ${townName}` : ''}`;
   .nav-btn:hover { background: var(--pp-lime-300); }
 
   .carousel :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+
+  /* ---- Compact strip (Deals and Businesses pages only) ----
+     Everything below applies only with .is-compact, so the homepage
+     carousel above is untouched. */
+  .is-compact { padding-block: var(--pp-space-3) var(--pp-space-2); }
+  .is-compact .carousel-title { font-size: var(--pp-text-base); margin-bottom: var(--pp-space-2); }
+  .is-compact .track { gap: var(--pp-space-3); padding-block: var(--pp-space-1) var(--pp-space-2); }
+  .is-compact .slide { flex: 0 0 min(15rem, 68vw); border-radius: var(--pp-radius-inset); box-shadow: none; }
+  .is-compact .slide-link {
+    flex-direction: row; align-items: center; gap: var(--pp-space-3);
+    padding: var(--pp-space-2);
+  }
+  .is-compact :global(.slide-thumb) { flex: 0 0 56px; width: 56px; border-radius: 6px; overflow: hidden; }
+  .is-compact .slide-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .is-compact .slide-merchant { color: var(--pp-text); font-size: var(--pp-text-sm); }
+  .is-compact .slide-count { font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-green); }
+  .is-compact .slide:hover .slide-count { text-decoration: underline; }
+  .is-compact .carousel-controls { padding-top: 0; }
+  .is-compact .pause-btn { min-height: 36px; font-size: var(--pp-text-xs); }
+  .is-compact .nav-btn { width: 36px; height: 36px; font-size: 1.25rem; }
 </style>
