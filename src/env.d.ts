@@ -8,6 +8,8 @@ declare global {
     interface Locals {
       db: SupabaseClient;
       profile: AdminProfile;
+      /** Per-request cache. See lib/memo.ts. */
+      memo: Map<string, Promise<unknown>>;
     }
   }
 }

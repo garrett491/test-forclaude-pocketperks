@@ -20,6 +20,7 @@ export default defineConfig({
   compressHTML: true,
   build: { inlineStylesheets: 'auto' },
   prefetch: { prefetchAll: true, defaultStrategy: 'hover' },
+  devToolbar: { enabled: false },
   vite: {
     build: {
       // No source maps in production: they hand an attacker a readable map

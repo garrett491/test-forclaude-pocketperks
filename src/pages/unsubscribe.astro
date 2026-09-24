@@ -1,29 +1,102 @@
 ---
 import Base from '../layouts/Base.astro';
-import { getSiteChrome, CACHE_STATIC } from '../lib/queries';
-Astro.response.headers.set('Cache-Control', CACHE_STATIC);
-const { settings } = await getSiteChrome();
+import { getSiteChrome } from '../lib/queries';
+import { getAdminDb } from '../lib/supabase';
+import { logDataError } from '../lib/errors';
+import { CACHE_NONE } from '../lib/queries';
+
+/**
+ * Unsubscribe.
+ *
+ * Every subscriber has a private unsubscribe token. A link of the form
+ * /unsubscribe?t=<token> belongs at the bottom of every email. Opening it
+ * shows one button; pressing it takes the address off the list at once.
+ *
+ * Why a button and not an instant unsubscribe on opening the link: email
+ * security scanners open every link in a message to check it, and an
+ * unsubscribe triggered by merely loading the page would silently remove
+ * people who never asked to leave.
+ *
+ * The row is kept, marked unsubscribed, so a later import cannot quietly
+ * put the address back on the list.
+ */
+Astro.response.headers.set('Cache-Control', CACHE_NONE);
+
+const { settings } = await getSiteChrome(Astro.locals);
 const email = settings['contact.email'] as string | undefined;
-const token = Astro.url.searchParams.get('t');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+let token = Astro.url.searchParams.get('t') ?? '';
+let outcome: 'done' | 'invalid' | 'error' | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  token = String(form.get('t') ?? '');
+  if (!UUID.test(token)) {
+    outcome = 'invalid';
+  } else {
+    try {
+      const { data, error } = await getAdminDb()
+        .from('subscribers')
+        .update({ status: 'unsubscribed', unsubscribed_at: new Date().toISOString() })
+        .eq('unsubscribe_token', token)
+        .select('id');
+      if (error) throw error;
+      // Already unsubscribed counts as done: the visitor's wish is met.
+      if (data && data.length) outcome = 'done';
+      else outcome = 'invalid';
+    } catch (error) {
+      logDataError('unsubscribe', error);
+      outcome = 'error';
+      Astro.response.status = 503;
+    }
+  }
+}
+
+const validToken = UUID.test(token);
 ---
 
 <Base title="Unsubscribe" noindex={true} canonicalPath="/unsubscribe">
   <div class="wrap section prose">
     <h1>Unsubscribe</h1>
-    {token ? (
-      <p>Use the unsubscribe link in any email and you will be removed straight away.</p>
-    ) : (
-      <p>
-        Every Pocket Perks email has an unsubscribe link at the bottom. Open the
-        most recent one and use that link, and you will be removed straight away.
+
+    {outcome === 'done' && (
+      <p class="form-success" role="status">You’re unsubscribed. You won’t get any more Pocket Perks emails.</p>
+    )}
+    {outcome === 'invalid' && (
+      <p class="form-error" role="alert">
+        That unsubscribe link isn’t recognised. It may be incomplete — try the link in
+        your most recent email again, or email us and we’ll remove you by hand.
       </p>
     )}
-    <p>If you cannot find it, write to us and we will take your address off the list.</p>
-    {email && <a class="btn btn-primary" href={`mailto:${email}?subject=Unsubscribe`}>Email us</a>}
+    {outcome === 'error' && (
+      <p class="form-error" role="alert">
+        That didn’t go through because of a problem on our side. Please try again in a
+        minute, or email us and we’ll remove you by hand.
+      </p>
+    )}
+
+    {outcome !== 'done' && validToken && outcome !== 'invalid' && (
+      <form method="post" class="stack">
+        <input type="hidden" name="t" value={token} />
+        <p>Press the button to stop receiving Pocket Perks emails.</p>
+        <div><button class="btn btn-primary" type="submit">Unsubscribe me</button></div>
+      </form>
+    )}
+
+    {!validToken && outcome === null && (
+      <p>
+        Every Pocket Perks email has an unsubscribe link at the bottom. Open it and
+        press the button, and you’ll be removed straight away.
+      </p>
+    )}
+
+    <p>You can also write to us and we’ll take your address off the list.</p>
+    {email && <a class="btn btn-outline" href={`mailto:${email}?subject=Unsubscribe`}>Email us</a>}
   </div>
 </Base>
 
 <style>
-  .prose { max-width: 40rem; }
+  .prose { max-width: 40rem; display: flex; flex-direction: column; gap: var(--pp-space-3); }
   .prose p { color: var(--pp-muted); }
 </style>

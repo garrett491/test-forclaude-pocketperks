@@ -1,5 +1,13 @@
 @import './tokens.css';
 
+/* The default type pair, served from this site rather than Google Fonts:
+   one fewer third-party connection on every first visit, no visitor IP
+   sent to Google, and no layout jump from a late font swap. Both families
+   are SIL Open Font License. Latin subset only. */
+@import '@fontsource/dm-sans/latin-400.css';
+@import '@fontsource/dm-sans/latin-600.css';
+@import '@fontsource/playfair-display/latin-700.css';
+
 /* =====================================================================
    Reset
    ===================================================================== */
@@ -343,3 +351,180 @@ ul, ol { margin: 0; padding: 0; }
 .more-band-soft:hover, .more-band-soft:focus-visible {
   background: var(--pp-accent); color: var(--pp-ink);
 }
+
+/* =====================================================================
+   Business images — MediaFrame.astro
+
+   The whole image is always visible: contained, never cropped, never
+   stretched, never enlarged past its natural size. The frame supplies the
+   shape; any space the image does not fill is a quiet neutral.
+   ===================================================================== */
+
+.mf {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  background: var(--mf-bg, var(--pp-frame));
+}
+.mf-logo { --mf-bg: var(--pp-white); }
+.mf img {
+  display: block;
+  /* Fills the frame, but never beyond twice the image's own pixels: a small
+     upload is shown usefully large without being blown up into a blur. The
+     contain fit happens inside that box, so nothing is ever distorted. */
+  width: min(100%, calc(var(--nw, 99999px) * 2));
+  height: min(100%, calc(var(--nh, 99999px) * 2));
+  object-fit: contain;
+}
+/* Logos get breathing room so a wordmark never touches the edge and reads
+   as cut off even though nothing was. */
+.mf-logo img {
+  width: min(100% - 16px, calc(var(--nw, 99999px) * 2));
+  height: min(100% - 16px, calc(var(--nh, 99999px) * 2));
+}
+
+/* box: a fixed shape, so a grid of cards lines up. */
+.mf-box { width: 100%; aspect-ratio: var(--box, 1.6); }
+
+/* fit: the image's own shape, between sensible limits. */
+.mf-fit {
+  width: 100%;
+  aspect-ratio: var(--ar, 1.7778);
+  max-height: var(--mf-max, min(70vh, 32rem));
+  min-height: var(--mf-min, 8rem);
+}
+
+/* tile: fixed height, width follows the logo from square to wide. */
+.mf-tile {
+  --tile-h: 56px;
+  height: var(--tile-h);
+  width: clamp(var(--tile-h), calc(var(--tile-h) * var(--ar, 1)), var(--tile-max, 132px));
+  flex-shrink: 0;
+  border: 1px solid var(--pp-line);
+  border-radius: var(--pp-radius-inset);
+}
+.mf-tile.mf-logo img {
+  width: min(100% - 10px, calc(var(--nw, 99999px) * 2));
+  height: min(100% - 10px, calc(var(--nh, 99999px) * 2));
+}
+
+.mf-fallback {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  background: var(--pp-deep-050); color: var(--pp-green);
+  font-family: var(--pp-font-display); font-weight: 700;
+  font-size: clamp(1.1rem, 30cqmin, 2.5rem);
+  letter-spacing: 0.02em;
+}
+.mf-box, .mf-fit, .mf-tile { container-type: size; }
+.mf-fallback[hidden] { display: none; }
+.mf.is-broken img { display: none; }
+.mf.is-empty, .mf.is-broken { --mf-bg: var(--pp-deep-050); }
+
+/* =====================================================================
+   Business cards — BusinessCard.astro
+   ===================================================================== */
+
+.biz-grid { align-items: stretch; }
+.biz-card { position: relative; }
+.biz-card:has(.stretch:focus-visible) { outline: 3px solid var(--pp-focus); outline-offset: 2px; }
+.biz-card .stretch:focus-visible { outline: none; }
+.biz-band { border-bottom: 1px solid var(--pp-line); }
+
+.biz-body {
+  padding: var(--pp-space-4);
+  display: flex; flex-direction: column; gap: var(--pp-space-3);
+  flex: 1;
+}
+.biz-head { display: flex; gap: var(--pp-space-3); align-items: center; }
+.biz-id { min-width: 0; flex: 1; }
+.biz-name { font-size: var(--pp-text-xl); margin: 0; line-height: 1.15; overflow-wrap: break-word; }
+.biz-name a { color: var(--pp-heading); text-decoration: none; }
+.biz-card:hover .biz-name a { color: var(--pp-green); text-decoration: underline; text-decoration-thickness: 2px; }
+.biz-meta { margin: 0.2rem 0 0; font-size: var(--pp-text-sm); color: var(--pp-muted); }
+.biz-status { margin: 0.1rem 0 0; font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted); }
+.biz-status.is-open { color: var(--pp-green); }
+.biz-featured { align-self: flex-start; }
+.biz-featured-band { position: absolute; top: var(--pp-space-3); left: var(--pp-space-3); z-index: 2; }
+.biz-card .biz-tile { --tile-h: 52px; --tile-max: 128px; }
+
+.coupons { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+.coupon {
+  padding: var(--pp-space-2) var(--pp-space-3) var(--pp-space-2) var(--pp-space-4);
+  border-left: var(--pp-stitch);
+  background: var(--pp-deep-050);
+  border-radius: var(--pp-radius-inset);
+}
+.coupon-headline {
+  margin: 0; font-weight: 700; font-size: var(--pp-text-base); line-height: 1.3;
+  color: var(--pp-text);
+}
+.coupon-badge { margin-right: var(--pp-space-2); vertical-align: 0.1em; }
+.coupon-desc { margin: 0.2rem 0 0; font-size: var(--pp-text-sm); color: var(--pp-muted); }
+.coupon-meta {
+  margin: 0.25rem 0 0; display: flex; flex-wrap: wrap; gap: 0.15rem var(--pp-space-3);
+  font-size: var(--pp-text-xs); color: var(--pp-muted); font-weight: 600;
+}
+.coupon-expiry.is-soon { color: var(--pp-text); font-weight: 700; }
+
+.biz-none { margin: 0; font-size: var(--pp-text-sm); color: var(--pp-muted); }
+.biz-cta {
+  margin: auto 0 0; padding-top: var(--pp-space-1);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--pp-space-3);
+  font-size: var(--pp-text-sm); font-weight: 700;
+}
+.biz-more {
+  background: var(--pp-action-bg); color: var(--pp-action-text);
+  padding: 0.35em 0.85em; border-radius: var(--pp-radius-chip);
+}
+.biz-see { color: var(--pp-green); margin-left: auto; white-space: nowrap; }
+.biz-card:hover .biz-see { text-decoration: underline; }
+
+/* The stretched link: one target covering the whole card. */
+.stretch::after { content: ''; position: absolute; inset: 0; z-index: 1; }
+
+/* =====================================================================
+   Search suggestions and empty search results
+   ===================================================================== */
+
+.suggest-panel {
+  position: absolute; left: 0; right: 0; top: calc(100% + var(--pp-space-2));
+  z-index: 25;
+  background: var(--pp-surface); color: var(--pp-text);
+  border: 1px solid var(--pp-line-strong);
+  border-radius: var(--pp-radius-card);
+  box-shadow: var(--pp-shadow-lift);
+  padding: var(--pp-space-2);
+  max-height: 60vh; overflow-y: auto;
+}
+.suggest-panel[hidden] { display: none; }
+.suggest-panel a {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--pp-space-2) var(--pp-space-3);
+  min-height: var(--pp-tap-min); justify-content: center;
+  border-radius: var(--pp-radius-inset);
+  color: var(--pp-text); text-decoration: none;
+}
+.suggest-panel a:hover, .suggest-panel a:focus-visible { background: var(--pp-deep-050); color: var(--pp-text); }
+.suggest-panel .sg-main { font-weight: 600; font-size: var(--pp-text-sm); }
+.suggest-panel .sg-sub { font-size: var(--pp-text-xs); color: var(--pp-muted); }
+.suggest-panel .sg-all {
+  display: block; text-align: center; font-weight: 700;
+  font-size: var(--pp-text-sm); color: var(--pp-link);
+  border-top: 1px solid var(--pp-line); margin-top: var(--pp-space-2);
+  padding-top: var(--pp-space-3);
+}
+.suggest-panel .sg-none { margin: 0; padding: var(--pp-space-4); text-align: center; font-size: var(--pp-text-sm); color: var(--pp-muted); }
+
+.search-empty {
+  grid-column: 1 / -1; text-align: center; color: var(--pp-muted);
+  padding: var(--pp-space-7) var(--pp-space-4);
+  border: 1px dashed var(--pp-line-strong); border-radius: var(--pp-radius-card);
+  background: var(--pp-surface); max-width: none;
+}
+[aria-busy='true'] { opacity: 0.6; transition: opacity var(--pp-duration) var(--pp-ease); }
+
+/* Pages that are loaded straight to a section (skip link, #anchors) should
+   not hide the heading under anything. */
+:target, main:focus { scroll-margin-top: 80px; }
+main:focus { outline: none; }

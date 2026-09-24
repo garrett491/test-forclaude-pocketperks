@@ -77,10 +77,12 @@ export const POST: APIRoute = async ({ cookies, request }) => {
   const height = parseInt(String(form.get('height') ?? ''), 10) || null;
   const altText = String(form.get('alt_text') ?? '').trim().slice(0, 200);
 
-  // Server-generated name. A client-supplied filename is a path-traversal and
-  // overwrite vector, and nothing useful is lost by discarding it.
+  // Server-generated names. A client-supplied filename is a path-traversal
+  // and overwrite vector, and nothing useful is lost by discarding it.
   const ext = mime.split('/')[1];
-  const path = `uploads/${new Date().getFullYear()}/${crypto.randomUUID()}.${ext}`;
+  const base = `uploads/${new Date().getFullYear()}/${crypto.randomUUID()}`;
+  const path = `${base}.${ext}`;
+  const written: string[] = [];
 
   const { error: uploadError } = await session.db.storage
     .from(BUCKET)
@@ -90,30 +92,62 @@ export const POST: APIRoute = async ({ cookies, request }) => {
     console.error('storage upload failed', uploadError.message);
     return json(500, { message: 'The image did not upload. Try again.' });
   }
+  written.push(path);
 
-  const { data: media, error: mediaError } = await session.db
+  /**
+   * Smaller copies, for cards on phones. Optional: if one is missing or
+   * anything about it is wrong it is skipped, and the original alone is
+   * still a working image.
+   */
+  const variants: { w: number; h: number; path: string }[] = [];
+  for (let index = 0; index < 3; index++) {
+    const file = form.get(`variant_${index}`);
+    const w = parseInt(String(form.get(`variant_${index}_width`) ?? ''), 10) || 0;
+    const h = parseInt(String(form.get(`variant_${index}_height`) ?? ''), 10) || 0;
+    if (!(file instanceof File) || file.size === 0 || file.size > MAX_BYTES || w <= 0 || h <= 0) continue;
+    if (width && w >= width) continue;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = sniff(bytes);
+    if (!kind) continue;
+    const variantPath = `${base}-${w}.${kind.split('/')[1]}`;
+    const { error } = await session.db.storage
+      .from(BUCKET)
+      .upload(variantPath, bytes, { contentType: kind, cacheControl: '31536000', upsert: false });
+    if (!error) { variants.push({ w, h, path: variantPath }); written.push(variantPath); }
+  }
+
+  const row = {
+    bucket_id: BUCKET,
+    storage_path: path,
+    alt_text: altText,
+    width,
+    height,
+    byte_size: buffer.byteLength,
+    mime_type: mime,
+    created_by: session.profile.id,
+  };
+  let result = await session.db
     .from('media')
-    .insert({
-      bucket_id: BUCKET,
-      storage_path: path,
-      alt_text: altText,
-      width,
-      height,
-      byte_size: buffer.byteLength,
-      mime_type: mime,
-      created_by: session.profile.id,
-    })
+    .insert({ ...row, variants })
     .select('id, bucket_id, storage_path, alt_text, width, height')
     .maybeSingle();
+  // A database without migration 0009 has no variants column. Keep working.
+  if (result.error?.code === 'PGRST204' || result.error?.code === '42703') {
+    result = await session.db.from('media').insert(row)
+      .select('id, bucket_id, storage_path, alt_text, width, height').maybeSingle();
+  }
+  const { data: media, error: mediaError } = result;
 
   if (mediaError || !media) {
-    // Do not leave an orphan file in the bucket if the row failed.
-    await session.db.storage.from(BUCKET).remove([path]);
+    // Do not leave orphan files in the bucket if the row failed.
+    await session.db.storage.from(BUCKET).remove(written);
     console.error('media row failed', mediaError?.code);
     return json(500, { message: 'The image did not save. Try again.' });
   }
 
-  const publicUrl = `${import.meta.env.PUBLIC_SUPABASE_URL}/storage/v1/render/image/public/${BUCKET}/${path}?width=400&quality=72`;
+  // The plain object URL. The /render/image/ transform URL used before is a
+  // paid-plan feature and fails on the Free plan, which broke every preview.
+  const publicUrl = `${import.meta.env.PUBLIC_SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
 
   return json(200, { media, preview_url: publicUrl, message: 'Image uploaded.' });
 };

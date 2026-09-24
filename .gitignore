@@ -6,3 +6,6 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+.supabase-local/
+test-results/
+playwright-report/

@@ -1,6 +1,8 @@
 import type { APIRoute } from 'astro';
 import { createHash } from 'node:crypto';
 import { getAdminDb } from '../../lib/supabase';
+import { logDataError } from '../../lib/errors';
+import { getSiteChrome } from '../../lib/queries';
 
 export const prerender = false;
 
@@ -28,11 +30,20 @@ function ipHash(ip: string): string {
   return createHash('sha256').update(`${salt}|${ip}`).digest('hex').slice(0, 32);
 }
 
-const json = (status: number, message: string, extra: Record<string, unknown> = {}) =>
-  new Response(JSON.stringify({ message, ...extra }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+/**
+ * JSON for the script-driven form. A plain form post (JavaScript off or
+ * failed) gets a redirect to a readable result page instead of raw JSON.
+ */
+const replier = (replyAsPage: boolean) => (status: number, message: string, extra: Record<string, unknown> = {}) =>
+  replyAsPage
+    ? new Response(null, {
+        status: 303,
+        headers: { Location: `/newsletter?status=${status < 300 ? 'ok' : status === 429 ? 'limited' : status === 400 ? 'invalid' : 'error'}` },
+      })
+    : new Response(JSON.stringify({ message, ...extra }), {
+        status,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
 
 async function overRateLimit(db: ReturnType<typeof getAdminDb>, ip: string): Promise<boolean> {
   // Five signups per IP per hour. A household or a coffee shop stays under
@@ -58,6 +69,7 @@ async function overRateLimit(db: ReturnType<typeof getAdminDb>, ip: string): Pro
 }
 
 export const POST: APIRoute = async ({ request }) => {
+  const json = replier(!request.headers.get('content-type')?.includes('application/json'));
   let body: any;
   try {
     body = request.headers.get('content-type')?.includes('application/json')
@@ -95,18 +107,53 @@ export const POST: APIRoute = async ({ request }) => {
 
     const source = typeof body.source === 'string' ? body.source.slice(0, 60) : 'unknown';
     const referrer = request.headers.get('referer')?.slice(0, 500) ?? null;
+    const path = typeof body.path === 'string' ? body.path.slice(0, 300) : null;
 
-    const { error } = await db.from('subscribers').upsert(
-      {
-        email,
-        status: 'active',
-        source,
-        referrer,
-        ip_hash: ipHash(ip),
+    // A record of what the person agreed to, in the words they were shown.
+    // Read from the database rather than trusted from the browser.
+    const { blocks } = await getSiteChrome();
+    const copy = (blocks['home.newsletter']?.payload ?? {}) as Record<string, string>;
+    const consentText = [
+      copy.headline || 'New deals, once a week',
+      copy.body || 'One email each week with what is new from local businesses.',
+      copy.fine_print || 'We only email about local deals. Unsubscribe any time.',
+    ].join(' — ').slice(0, 500);
+    const consent = { consent_text: consentText, consent_at: new Date().toISOString(), consent_path: path };
+
+    const { data: existing, error: lookupError } = await db
+      .from('subscribers').select('id, status').eq('email', email).maybeSingle();
+    if (lookupError) throw lookupError;
+
+    let error: { code?: string } | null = null;
+    if (!existing) {
+      ({ error } = await db.from('subscribers').insert({
+        email, status: 'active', source, referrer, ip_hash: ipHash(ip),
         utm: typeof body.utm === 'object' && body.utm ? body.utm : {},
-      },
-      { onConflict: 'email', ignoreDuplicates: true }
-    );
+        ...consent,
+      }));
+      // Legacy database without the consent columns: store the signup anyway.
+      if (error?.code === 'PGRST204' || error?.code === '42703') {
+        ({ error } = await db.from('subscribers').insert({
+          email, status: 'active', source, referrer, ip_hash: ipHash(ip),
+          utm: typeof body.utm === 'object' && body.utm ? body.utm : {},
+        }));
+      }
+    } else if (existing.status !== 'active') {
+      // Someone who left and has now deliberately signed up again is back
+      // on the list, with the new consent recorded. Previously they were
+      // told "you're on the list" and silently stayed unsubscribed.
+      ({ error } = await db.from('subscribers')
+        .update({ status: 'active', unsubscribed_at: null, source, ...consent })
+        .eq('id', existing.id));
+      if (error?.code === 'PGRST204' || error?.code === '42703') {
+        ({ error } = await db.from('subscribers')
+          .update({ status: 'active', unsubscribed_at: null, source })
+          .eq('id', existing.id));
+      }
+    }
+
+    // Two taps of the button can race; the second finding the first is fine.
+    if (error?.code === '23505') error = null;
 
     if (error) {
       // Log the failure, but never return the database message to the
@@ -117,13 +164,9 @@ export const POST: APIRoute = async ({ request }) => {
 
     return json(200, "You're on the list. Watch your inbox.");
   } catch (err) {
-    console.error('subscribe error', err instanceof Error ? err.message : 'unknown');
+    logDataError('subscribe', err);
     return json(500, 'That did not save. Try again in a moment.');
   }
 };
 
-/**
- * Without JavaScript the form posts normally and lands here. Rather than
- * showing raw JSON, send the visitor back with a confirmation flag.
- */
-export const GET: APIRoute = () => new Response(null, { status: 405 });
+export const GET: APIRoute = () => new Response(null, { status: 405, headers: { Allow: 'POST' } });

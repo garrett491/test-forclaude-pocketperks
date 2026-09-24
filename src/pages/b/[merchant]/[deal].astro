@@ -1,79 +1,96 @@
 ---
 import Base from '../../../layouts/Base.astro';
 import DealCard from '../../../components/DealCard.astro';
-import { getDeal, getMerchant, CACHE_PUBLIC } from '../../../lib/queries';
+import MediaFrame from '../../../components/MediaFrame.astro';
+import ServiceNotice from '../../../components/ServiceNotice.astro';
+import { getDeal, getMerchant } from '../../../lib/queries';
+import { cachePublic, markUnavailable } from '../../../lib/http';
+import { logDataError } from '../../../lib/errors';
 import {
-  imageUrl, imageSrcSet, expiryLabel, telHref, directionsHref,
-  formatAddress, openStatus, initials,
+  imageUrl, expiryLabel, telHref, directionsHref, formatAddress, openStatus, formatDate,
 } from '../../../lib/format';
-
-const { merchant: merchantSlug, deal: dealSlug } = Astro.params;
-const deal = await getDeal(merchantSlug!, dealSlug!);
-
-if (!deal) {
-  return Astro.rewrite('/404');
-}
-
-Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
-
-const merchant = (await getMerchant(merchantSlug!)) ?? deal.merchant!;
-const otherDeals = (merchant.deals ?? []).filter((d) => d.id !== deal.id);
-
-const expiry = expiryLabel(deal);
-const tel = telHref(merchant);
-const directions = directionsHref(merchant);
-const address = formatAddress(merchant);
-const status = openStatus(merchant.hours);
-const art = deal.image ?? merchant.cover ?? merchant.logo;
+import type { Deal, Merchant } from '../../../lib/types';
 
 /**
- * This page is the reason deals now have URLs.
+ * One deal, e.g. /b/crossroads-pizza/ten-off-large.
  *
- * The old site opened deals in a modal and its share button posted the
- * homepage link for every offer — the same URL, no title, no image, no
- * context. Facebook is the primary distribution channel, so a deal that
- * cannot be linked to individually cannot really be shared at all.
+ * The reason deals have URLs: a shared link shows this offer, with its own
+ * title and picture, rather than the homepage.
  */
-const offerSchema = {
+const { merchant: merchantSlug, deal: dealSlug } = Astro.params;
+
+let deal: Deal | null = null;
+let merchant: Merchant | null = null;
+let unavailable = false;
+try {
+  deal = await getDeal(merchantSlug!, dealSlug!);
+  if (deal) merchant = (await getMerchant(merchantSlug!)) ?? deal.merchant ?? null;
+} catch (error) {
+  logDataError(`deal page ${merchantSlug}/${dealSlug}`, error);
+  unavailable = true;
+}
+
+// An ended deal is a 404 by design: the database stops returning expired
+// offers, so an old shared link lands on a page pointing at what is running
+// now, not on an offer the business would refuse at the counter.
+if (!unavailable && (!deal || !merchant)) return Astro.rewrite('/404');
+
+if (unavailable) markUnavailable(Astro);
+else cachePublic(Astro);
+
+const siteUrl = (import.meta.env.PUBLIC_SITE_URL ?? '').replace(/\/$/, '');
+const otherDeals = merchant && deal ? (merchant.deals ?? []).filter((d) => d.id !== deal!.id) : [];
+const expiry = deal ? expiryLabel(deal) : null;
+const tel = merchant ? telHref(merchant) : null;
+const directions = merchant ? directionsHref(merchant) : null;
+const address = merchant ? formatAddress(merchant) : null;
+const status = openStatus(merchant?.hours);
+const art = deal ? (deal.image ?? merchant?.cover ?? merchant?.logo ?? null) : null;
+const artIsLogo = !!deal && !deal.image && !merchant?.cover && !!merchant?.logo;
+
+const offerSchema = deal && merchant ? {
   '@context': 'https://schema.org',
   '@type': 'Offer',
   name: deal.headline,
   ...(deal.description && { description: deal.description }),
-  url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}/${deal.slug}`,
+  url: `${siteUrl}/b/${merchant.slug}/${deal.slug}`,
   ...(deal.starts_at && { validFrom: deal.starts_at }),
   ...(deal.ends_at && { availabilityEnds: deal.ends_at }),
-  ...(art && { image: imageUrl(art, 1200, 80) }),
+  ...(art && { image: imageUrl(art) }),
   offeredBy: {
     '@type': 'LocalBusiness',
     name: merchant.name,
-    url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}`,
+    url: `${siteUrl}/b/${merchant.slug}`,
     ...(merchant.phone_e164 && { telephone: merchant.phone_e164 }),
   },
-};
+} : null;
 ---
 
 <Base
-  title={`${deal.headline} — ${merchant.name}`}
-  description={
+  title={deal && merchant ? `${deal.headline} — ${merchant.name}` : 'Temporarily unavailable'}
+  description={deal && merchant ? (
     deal.description ??
     `${deal.headline} at ${merchant.name}${merchant.town ? ` in ${merchant.town.name}, ${merchant.town.state_code}` : ''}.${expiry ? ` ${expiry}.` : ''}`
-  }
-  canonicalPath={`/b/${merchant.slug}/${deal.slug}`}
-  ogImage={imageUrl(art, 1200, 80)}
+  ) : undefined}
+  canonicalPath={`/b/${merchantSlug}/${dealSlug}`}
+  ogImage={imageUrl(art)}
   ogType="article"
-  schema={[offerSchema]}
-  breadcrumbs={[
+  noindex={unavailable}
+  schema={offerSchema ? [offerSchema] : []}
+  breadcrumbs={deal && merchant ? [
     { name: 'Home', href: '/' },
-    { name: 'Businesses', href: '/businesses' },
     { name: merchant.name, href: `/b/${merchant.slug}` },
     { name: deal.headline, href: `/b/${merchant.slug}/${deal.slug}` },
-  ]}
+  ] : []}
 >
+  {unavailable || !deal || !merchant ? (
+    <ServiceNotice />
+  ) : (
   <article class="deal" data-merchant-id={merchant.id} data-deal-id={deal.id} data-track-deal-open>
     <div class="wrap deal-grid">
       <div class="primary">
         <nav class="crumbs" aria-label="Breadcrumb">
-          <a href={`/b/${merchant.slug}`}>{merchant.name}</a>
+          <a href={`/b/${merchant.slug}`}>← All deals from {merchant.name}</a>
         </nav>
 
         <h1>{deal.headline}</h1>
@@ -84,18 +101,24 @@ const offerSchema = {
         </div>
 
         {art && (
-          <img
-            class="deal-art"
-            src={imageUrl(art, 900, 78)}
-            srcset={imageSrcSet(art, 700)}
-            sizes="(min-width: 60rem) 700px, 94vw"
-            alt={art.alt_text || deal.headline}
-            width="900" height="560"
-            fetchpriority="high" decoding="async"
-          />
+          <div class="deal-art">
+            {/* The whole image. A flyer's prices, dates and small print are
+                never cut off to make it fit. */}
+            <MediaFrame asset={art} mode="fit" kind={artIsLogo ? 'logo' : 'photo'}
+                        alt={deal.image ? (deal.image.alt_text || deal.headline) : ''}
+                        name={merchant.name} width={1200} priority={true}
+                        sizes="(min-width: 60rem) 760px, 94vw" />
+          </div>
         )}
 
         {deal.description && <p class="desc">{deal.description}</p>}
+
+        {(deal.restrictions || deal.ends_at || deal.starts_at) && (
+          <ul class="limits list-plain" aria-label="Key details">
+            {deal.restrictions && <li>{deal.restrictions}</li>}
+            {deal.ends_at && <li>Valid until {formatDate(deal.ends_at)}</li>}
+          </ul>
+        )}
 
         {deal.coupon_code && (
           <div class="stitch-panel code-block">
@@ -119,13 +142,10 @@ const offerSchema = {
           </details>
         )}
 
-        {/* Right under the offer, before the terms — the moment someone has
-            decided they like this deal is the moment to say there are more. */}
         {otherDeals.length > 0 && (
           <a class="more-band deal-more" href={`/b/${merchant.slug}`}>
             <span class="mb-text">
-              {merchant.name} has {otherDeals.length} more
-              {otherDeals.length === 1 ? ' deal' : ' deals'} — see them all
+              {merchant.name} has {otherDeals.length} more {otherDeals.length === 1 ? 'deal' : 'deals'}
             </span>
             <span class="mb-arrow" aria-hidden="true">→</span>
           </a>
@@ -134,25 +154,19 @@ const offerSchema = {
         <div class="share-row">
           <button
             class="btn btn-outline" type="button"
-            data-share data-title={deal.headline} data-merchant={merchant.id} data-deal={deal.id}
+            data-share data-title={`${deal.headline} — ${merchant.name}`} data-merchant={merchant.id} data-deal={deal.id}
           >Share this deal</button>
+          <span class="share-status" role="status" aria-live="polite"></span>
         </div>
       </div>
 
-      <aside class="redeem" aria-label="How to use this deal">
+      <aside class="redeem" aria-labelledby="redeem-title">
         <div class="redeem-card card">
           <div class="redeem-head">
-            <div class="logo">
-              {merchant.logo ? (
-                <img src={imageUrl(merchant.logo, 120)} alt={merchant.logo.alt_text || merchant.name}
-                     width="56" height="56" loading="lazy" decoding="async" />
-              ) : (
-                <span class="logo-fallback" aria-hidden="true">{initials(merchant.name)}</span>
-              )}
-            </div>
+            <MediaFrame asset={merchant.logo} mode="tile" kind="logo" alt="" name={merchant.name} width={200} class="redeem-logo" />
             <div>
-              <h2><a href={`/b/${merchant.slug}`}>{merchant.name}</a></h2>
-              {status && <p class={`status ${status.isOpen ? 'is-open' : ''}`}>{status.label}</p>}
+              <h2 id="redeem-title"><a href={`/b/${merchant.slug}`}>{merchant.name}</a></h2>
+              {status && <p class:list={['status', { 'is-open': status.isOpen }]}>{status.label}</p>}
             </div>
           </div>
 
@@ -168,18 +182,19 @@ const offerSchema = {
             {directions && (
               <a class="btn btn-outline btn-block" href={directions} target="_blank" rel="noopener noreferrer"
                  data-track="directions_click" data-merchant={merchant.id} data-deal={deal.id}>
-                Get directions
+                Get directions<span class="sr-only"> (opens in a new tab)</span>
               </a>
             )}
             {merchant.website_url && (
               <a class="btn btn-outline btn-block" href={merchant.website_url} target="_blank" rel="noopener noreferrer"
                  data-track="website_click" data-merchant={merchant.id} data-deal={deal.id}>
-                Visit website
+                Visit website<span class="sr-only"> (opens in a new tab)</span>
               </a>
             )}
           </div>
 
           {address && <p class="address">{address}</p>}
+          <p class="fine">Offered by {merchant.name}, who sets its terms. Pocket Perks lists it on their behalf.</p>
         </div>
       </aside>
     </div>
@@ -193,13 +208,14 @@ const offerSchema = {
       </section>
     )}
   </article>
+  )}
 </Base>
 
 <style>
   .deal-grid {
     display: grid; gap: var(--pp-space-6);
-    grid-template-columns: 1fr;
-    padding-block: var(--pp-space-5);
+    grid-template-columns: minmax(0, 1fr);
+    padding-block: var(--pp-space-4) var(--pp-space-5);
   }
   @media (min-width: 60rem) {
     .deal-grid { grid-template-columns: minmax(0, 1fr) 20rem; align-items: start; }
@@ -207,17 +223,23 @@ const offerSchema = {
     .redeem { position: sticky; top: 76px; }
   }
 
-  .crumbs { font-size: var(--pp-text-sm); margin-bottom: var(--pp-space-2); }
+  .crumbs { font-size: var(--pp-text-sm); font-weight: 600; margin-bottom: var(--pp-space-1); }
+  .crumbs a { display: inline-flex; min-height: var(--pp-tap-min); align-items: center; }
   .deal h1 { margin-bottom: var(--pp-space-3); }
   .deal-meta { display: flex; gap: var(--pp-space-3); align-items: center; margin-bottom: var(--pp-space-4); }
-  .expiry { font-size: var(--pp-text-sm); font-weight: 600; color: var(--pp-muted); }
+  .deal-meta:empty { display: none; }
+  .expiry { font-size: var(--pp-text-sm); font-weight: 700; color: var(--pp-text); }
 
   .deal-art {
-    width: 100%; aspect-ratio: 16 / 10; object-fit: cover;
-    border-radius: var(--pp-radius-card); margin-bottom: var(--pp-space-4);
-    background: var(--pp-deep-050);
+    margin-bottom: var(--pp-space-4);
+    border-radius: var(--pp-radius-card); overflow: hidden;
+    border: 1px solid var(--pp-line);
   }
+  .deal-art :global(.mf-fit) { --mf-max: min(70vh, 36rem); --mf-min: 10rem; }
   .desc { font-size: var(--pp-text-lg); }
+
+  .limits { display: flex; flex-direction: column; gap: var(--pp-space-1); margin: 0 0 var(--pp-space-3); font-size: var(--pp-text-sm); font-weight: 600; color: var(--pp-muted); }
+  .limits li::before { content: '• '; color: var(--pp-accent); }
 
   .code-block {
     display: flex; align-items: center; justify-content: space-between;
@@ -227,7 +249,7 @@ const offerSchema = {
   .code-label { font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted); margin: 0; }
   .code-value {
     font-family: var(--pp-font-display); font-size: var(--pp-text-2xl);
-    color: var(--pp-green); margin: 0; letter-spacing: 0.02em;
+    color: var(--pp-green); margin: 0; letter-spacing: 0.02em; overflow-wrap: anywhere;
   }
 
   .terms { margin-block: var(--pp-space-4); font-size: var(--pp-text-sm); }
@@ -235,30 +257,22 @@ const offerSchema = {
     cursor: pointer; font-weight: 600; color: var(--pp-green);
     min-height: var(--pp-tap-min); display: flex; align-items: center;
   }
-  .terms p { color: var(--pp-muted); margin-top: var(--pp-space-2); }
+  .terms p { color: var(--pp-muted); margin-top: var(--pp-space-2); white-space: pre-line; }
 
   .deal-more { margin-top: var(--pp-space-4); min-height: 52px; font-size: var(--pp-text-base); }
-  .share-row { margin-top: var(--pp-space-4); }
+  .share-row { margin-top: var(--pp-space-4); display: flex; align-items: center; gap: var(--pp-space-3); flex-wrap: wrap; }
+  .share-status { font-size: var(--pp-text-sm); color: var(--pp-green); font-weight: 600; }
 
   .redeem-card { padding: var(--pp-space-4); gap: var(--pp-space-4); }
   .redeem-head { display: flex; gap: var(--pp-space-3); align-items: center; }
+  .redeem-head :global(.redeem-logo) { --tile-h: 56px; --tile-max: 120px; }
   .redeem-head h2 { font-size: var(--pp-text-lg); margin: 0; }
   .redeem-head h2 a { color: var(--pp-text); text-decoration: none; }
   .redeem-head h2 a:hover { color: var(--pp-green); text-decoration: underline; }
-  .logo {
-    width: 56px; height: 56px; flex-shrink: 0; overflow: hidden;
-    border-radius: var(--pp-radius-inset); background: var(--pp-white);
-    border: 1px solid var(--pp-line); display: grid; place-items: center;
-  }
-  .logo img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
-  .logo-fallback {
-    width: 100%; height: 100%; display: grid; place-items: center;
-    background: var(--pp-deep); color: var(--pp-lime-300);
-    font-family: var(--pp-font-display);
-  }
   .status { font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted); margin: 0.2rem 0 0; }
   .status.is-open { color: var(--pp-green); }
   .redeem-note { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
   .redeem-actions { display: flex; flex-direction: column; gap: var(--pp-space-2); }
   .address { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
+  .fine { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: 0; }
 </style>

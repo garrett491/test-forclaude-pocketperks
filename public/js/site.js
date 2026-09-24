@@ -120,22 +120,29 @@ function initCopyButtons() {
 
 function initShareButtons() {
   document.querySelectorAll('[data-share]').forEach((button) => {
+    const status = button.parentElement && button.parentElement.querySelector('.share-status');
+    const say = (text) => {
+      if (!status) return;
+      status.textContent = text;
+      setTimeout(() => { status.textContent = ''; }, 3000);
+    };
     button.addEventListener('click', async () => {
-      // The current page URL, which is now a real deal page rather than the
-      // homepage link the old share button sent for every offer.
-      const url = location.href;
+      // This deal's own page, so the preview shows this offer.
+      const url = location.origin + location.pathname;
       const title = button.dataset.title || document.title;
+      sendEvent({ event_type: 'share', merchant_id: button.dataset.merchant || null, deal_id: button.dataset.deal || null });
       try {
         if (navigator.share) {
           await navigator.share({ title, url });
-        } else {
+        } else if (navigator.clipboard) {
           await navigator.clipboard.writeText(url);
-          const original = button.textContent;
-          button.textContent = 'Link copied';
-          setTimeout(() => { button.textContent = original; }, 2200);
+          say('Link copied. Paste it anywhere to share.');
+        } else {
+          window.prompt('Copy this link to share it:', url);
         }
-      } catch {
-        // The visitor cancelled the share sheet. Not an error.
+      } catch (error) {
+        // Cancelling the share sheet is not an error; a refused clipboard is.
+        if (error && error.name !== 'AbortError') window.prompt('Copy this link to share it:', url);
       }
     });
   });
@@ -267,228 +274,311 @@ function initLeadForm() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Carousel                                                            */
+/* Featured carousel                                                   */
 /*                                                                     */
-/* Three problems this fixes, all of which showed up on mobile:         */
+/* A continuous drift that loops without ever visibly resetting.       */
 /*                                                                     */
-/* 1. It restarted from the beginning while the page was scrolled.      */
-/*    Mobile browsers fire `resize` when the address bar hides or       */
-/*    shows, and the old handler reset the offset on any resize. It now */
-/*    only re-measures when the WIDTH actually changes.                 */
+/* How the loop stays seamless: the strip is followed by inert copies  */
+/* of itself, and the position wraps by exactly the measured width of  */
+/* one set. At the moment of wrapping, the copy on screen is pixel-    */
+/* identical to the original it replaces, so nothing jumps.            */
 /*                                                                     */
-/* 2. It stuttered during vertical scrolling, because every animation   */
-/*    frame called getBoundingClientRect and forced a layout. Widths    */
-/*    are measured once and cached.                                     */
+/* How it stays cheap: one requestAnimationFrame loop that runs only    */
+/* while the strip is moving AND on screen AND the tab is visible. When */
+/* paused, scrolled away or hovered, it stops completely.               */
 /*                                                                     */
-/* 3. Touching a card paused it for a moment, which is right, but a tap */
-/*    must never stop the slideshow for good. Only the pause button     */
-/*    does that.                                                        */
+/* How it stays tappable: slides are ordinary links. Movement is a      */
+/* transform, which never interferes with a tap; a drag is told apart   */
+/* from a tap and never opens a link by accident.                       */
 /* ------------------------------------------------------------------ */
 
 function initCarousel() {
-  const root = document.querySelector('[data-carousel]');
-  if (!root) return;
+  document.querySelectorAll('[data-carousel]').forEach(setupCarousel);
+}
 
+function setupCarousel(root) {
+  const viewport = root.querySelector('[data-carousel-viewport]');
   const track = root.querySelector('[data-carousel-track]');
-  if (!track) return;
-
+  if (!viewport || !track) return;
   const originals = Array.from(track.querySelectorAll('[data-slide]'));
   if (!originals.length) return;
 
-  const prev = root.querySelector('[data-carousel-prev]');
-  const next = root.querySelector('[data-carousel-next]');
+  const controls = root.querySelector('[data-carousel-controls]');
+  const prevButton = root.querySelector('[data-carousel-prev]');
+  const nextButton = root.querySelector('[data-carousel-next]');
   const pauseButton = root.querySelector('[data-carousel-pause]');
   const pauseLabel = root.querySelector('[data-pause-label]');
   const pauseIcon = root.querySelector('[data-pause-icon]');
-  const manualControls = root.querySelector('[data-manual-controls]');
 
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const autoplay = root.dataset.autoplay !== 'false';
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const seconds = Math.min(20, Math.max(4, parseFloat(root.dataset.seconds || '8') || 8));
+  const autoplayWanted = root.dataset.autoplay !== 'false';
 
-  const cloneAll = () => {
-    originals.forEach((slide) => {
-      const clone = slide.cloneNode(true);
-      clone.setAttribute('aria-hidden', 'true');
-      clone.removeAttribute('data-track-impression');
-      // Clones must not be reachable by keyboard: tabbing would cycle
-      // through the same business several times.
-      clone.querySelectorAll('a, button').forEach((el) => el.setAttribute('tabindex', '-1'));
-      track.appendChild(clone);
-    });
-  };
+  viewport.classList.add('is-enhanced');
+  viewport.scrollLeft = 0;
 
-  let copies = 0;
-  while (track.scrollWidth < window.innerWidth * 2 && copies < 8) { cloneAll(); copies += 1; }
-  cloneAll();
-  copies += 1;
+  let clones = [];
+  let loopWidth = 0;       // width of one full set of slides, gap included
+  let positions = [];      // left edge of each original, relative to the first
+  let offset = 0;          // current distance moved, always 0 <= offset < loopWidth
+  let staticStrip = false; // everything fits: no movement, no controls
+  let playing = autoplayWanted && !reduceMotion.matches;
+  let hasPlayed = playing;
+  let onScreen = true;
+  let hovered = false;
+  let focused = false;
+  let dragging = false;
+  let tween = null;
+  let frame = 0;
+  let lastTime = 0;
+  let lastWidth = 0;
 
-  // Measured once, and again only on a real width change.
-  let slideStep = 0;
-  let loopWidth = 0;
-  let lastWidth = window.innerWidth;
+  const apply = () => { track.style.transform = `translate3d(${-offset}px, 0, 0)`; };
+  const wrap = (value) => (loopWidth > 0 ? ((value % loopWidth) + loopWidth) % loopWidth : 0);
 
-  /**
-   * If a slide ever measures zero the drift distance per frame becomes zero
-   * and the carousel is frozen for good — silently, with no error. That can
-   * happen when the strip is measured before web fonts settle, or while it
-   * sits in a container that has not been laid out yet.
-   *
-   * So: never trust a zero. Fall back to the width the CSS would give,
-   * re-measure once the page has finished loading, and keep retrying for a
-   * short while until a real number arrives.
-   */
-  const fallbackWidth = () => Math.min(544, window.innerWidth * 0.82) + 16;
-
-  const measure = () => {
-    const first = track.querySelector('[data-slide]');
-    const gap = parseFloat(getComputedStyle(track).gap || '0') || 16;
-    const measured = first ? first.getBoundingClientRect().width : 0;
-    slideStep = (measured > 0 ? measured : fallbackWidth()) + (measured > 0 ? gap : 0);
-    loopWidth = slideStep * originals.length * copies;
-    return measured > 0;
-  };
-
-  let measured = measure();
-
-  if (!measured) {
-    let attempts = 0;
-    const retry = () => {
-      if (measured || attempts > 20) return;
-      attempts += 1;
-      measured = measure();
-      if (!measured) setTimeout(retry, 150);
-    };
-    setTimeout(retry, 150);
+  function measure() {
+    const first = originals[0];
+    const last = originals[originals.length - 1];
+    const gap = parseFloat(getComputedStyle(track).columnGap) || 16;
+    loopWidth = last.offsetLeft + last.offsetWidth + gap - first.offsetLeft;
+    positions = originals.map((slide) => slide.offsetLeft - first.offsetLeft);
+    // If every business already fits on screen there is nothing to scroll
+    // to, and a drifting copy of the same card would just look odd.
+    const visibleWidth = viewport.clientWidth - first.offsetLeft;
+    staticStrip = loopWidth - gap <= visibleWidth;
   }
 
-  // Fonts and images change slide width after first paint.
-  window.addEventListener('load', () => { measure(); }, { once: true });
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => measure()).catch(() => {});
+  function buildClones() {
+    clones.forEach((clone) => clone.remove());
+    clones = [];
+    if (staticStrip) return;
+    // Enough copies to cover the screen twice over past the end of one set,
+    // so neither the drift nor a step back ever shows an empty edge.
+    const sets = Math.ceil(viewport.clientWidth / loopWidth) + 2;
+    for (let set = 0; set < sets; set += 1) {
+      originals.forEach((slide) => {
+        const clone = slide.cloneNode(true);
+        // inert: unreachable by keyboard, invisible to screen readers,
+        // and ignored by the impression counter. One business, one stop.
+        clone.setAttribute('inert', '');
+        clone.setAttribute('aria-hidden', 'true');
+        clone.removeAttribute('data-track-impression');
+        clone.removeAttribute('aria-label');
+        track.appendChild(clone);
+        clones.push(clone);
+      });
+    }
   }
 
-  let offset = 0;
-  let manual = reduceMotion || !autoplay;
-  let held = false;
-  let last = 0;
-
-  const applyOffset = () => { track.style.transform = `translate3d(${-offset}px, 0, 0)`; };
-
-  const step = (now) => {
-    if (!last) last = now;
-    const delta = Math.min(0.05, (now - last) / 1000); // cap after a stall
-    last = now;
-
-    if (!manual && !held && !document.hidden) {
-      offset += (slideStep / seconds) * delta;
-      if (loopWidth > 0 && offset >= loopWidth) offset -= loopWidth;
-      applyOffset();
-    }
-    requestAnimationFrame(step);
-  };
-
-  const setManual = (value) => {
-    manual = value;
-    root.classList.toggle('is-manual', manual);
-    if (manualControls) manualControls.hidden = !manual;
-    if (pauseButton) {
-      pauseButton.setAttribute('aria-pressed', manual ? 'true' : 'false');
-      if (pauseLabel) pauseLabel.textContent = manual ? 'Resume slideshow' : 'Pause slideshow';
-      if (pauseIcon) pauseIcon.textContent = manual ? '▶' : '❚❚';
-    }
-  };
-
-  const snap = () => {
-    if (slideStep <= 0) return;
-    offset = Math.round(offset / slideStep) * slideStep;
-    if (loopWidth > 0) { if (offset < 0) offset += loopWidth; if (offset >= loopWidth) offset -= loopWidth; }
-  };
-
-  const glide = () => {
-    track.style.transition = 'transform 320ms cubic-bezier(0.2, 0, 0, 1)';
-    applyOffset();
-    setTimeout(() => { track.style.transition = ''; }, 340);
-  };
-
-  const nudge = (direction) => {
-    snap();
-    offset += direction * slideStep;
-    if (loopWidth > 0) { if (offset < 0) offset += loopWidth; if (offset >= loopWidth) offset -= loopWidth; }
-    glide();
-  };
-
-  if (prev) prev.addEventListener('click', () => nudge(-1));
-  if (next) next.addEventListener('click', () => nudge(1));
-
-  if (pauseButton) {
-    pauseButton.addEventListener('click', () => {
-      const goingManual = !manual;
-      if (goingManual) { snap(); glide(); }
-      setManual(goingManual);
-    });
+  function layout() {
+    lastWidth = viewport.clientWidth;
+    const fraction = loopWidth > 0 ? offset / loopWidth : 0;
+    measure();
+    buildClones();
+    offset = staticStrip ? 0 : wrap(fraction * loopWidth);
+    apply();
+    render();
   }
 
-  // A pointer resting on the strip pauses it; moving away resumes. This is
-  // temporary by design — tapping a card opens the deal and never stops the
-  // slideshow permanently.
-  const hold = () => { held = true; };
-  const release = () => { held = false; };
-  root.addEventListener('mouseenter', hold, { passive: true });
-  root.addEventListener('mouseleave', release, { passive: true });
-  root.addEventListener('focusin', hold);
-  root.addEventListener('focusout', release);
+  /* ---- The drift loop ---- */
 
-  /*
-    Touch is the subtle one. A finger landing on the carousel might be
-    starting a horizontal swipe of the strip, or a vertical scroll of the
-    page that happens to begin here. Pausing on every touch made the
-    carousel feel broken while scrolling, so we watch the direction: a
-    mostly-vertical move is the page scrolling and is left alone.
-  */
-  let touchX = 0, touchY = 0, horizontal = false;
-  root.addEventListener('touchstart', (event) => {
-    const t = event.touches[0];
-    touchX = t.clientX; touchY = t.clientY; horizontal = false;
-    held = true;
-  }, { passive: true });
+  const shouldRun = () =>
+    playing && !staticStrip && onScreen && !document.hidden && !hovered && !focused && !dragging && !tween;
 
-  root.addEventListener('touchmove', (event) => {
-    const t = event.touches[0];
-    if (!horizontal && Math.abs(t.clientY - touchY) > Math.abs(t.clientX - touchX) + 6) {
-      held = false; // vertical scroll — let it keep drifting
-    } else if (Math.abs(t.clientX - touchX) > 10) {
-      horizontal = true; held = true;
+  function schedule() {
+    track.classList.toggle('is-moving', shouldRun() || !!tween);
+    if (!frame && (shouldRun() || tween)) {
+      lastTime = 0;
+      frame = requestAnimationFrame(step);
     }
-  }, { passive: true });
+  }
 
-  root.addEventListener('touchend', () => {
-    if (horizontal) {
-      const moved = touchX;
-      void moved;
+  function step(now) {
+    frame = 0;
+    const delta = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0;
+    lastTime = now;
+
+    if (tween) {
+      const t = Math.min(1, (now - tween.start) / tween.duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      offset = tween.from + (tween.to - tween.from) * eased;
+      if (t >= 1) { offset = wrap(tween.to); tween = null; }
+      apply();
+    } else if (shouldRun()) {
+      offset = wrap(offset + (loopWidth / originals.length / seconds) * delta);
+      apply();
     }
-    setTimeout(() => { held = false; }, 600);
-  }, { passive: true });
+
+    if (shouldRun() || tween) frame = requestAnimationFrame(step);
+    else track.classList.remove('is-moving');
+  }
+
+  function glideTo(target) {
+    const duration = reduceMotion.matches ? 0 : 380;
+    if (duration === 0) { offset = wrap(target); apply(); return; }
+    tween = { from: offset, to: target, start: performance.now(), duration };
+    schedule();
+  }
+
+  /* ---- Manual movement ---- */
+
+  function nearest(from) {
+    let best = 0;
+    let bestDistance = Infinity;
+    for (const p of [...positions, loopWidth]) {
+      const distance = Math.abs(p - from);
+      if (distance < bestDistance) { best = p; bestDistance = distance; }
+    }
+    return best;
+  }
+
+  function moveBy(direction) {
+    if (staticStrip) return;
+    tween = null;
+    if (direction < 0 && offset < 2) { offset += loopWidth; apply(); }
+    const candidates = [...positions, ...positions.map((p) => p + loopWidth), loopWidth * 2];
+    const target = direction > 0
+      ? candidates.find((p) => p > offset + 2)
+      : [...candidates].reverse().find((p) => p < offset - 2);
+    if (target !== undefined) glideTo(target);
+  }
+
+  /* ---- Controls ---- */
+
+  function render() {
+    const moving = !reduceMotion.matches && !staticStrip;
+    if (controls) controls.hidden = staticStrip;
+    if (pauseButton) pauseButton.hidden = !moving;
+    if (prevButton) prevButton.hidden = playing && moving;
+    if (nextButton) nextButton.hidden = playing && moving;
+    if (pauseLabel) {
+      pauseLabel.textContent = playing ? 'Pause slideshow' : hasPlayed ? 'Resume slideshow' : 'Play slideshow';
+    }
+    if (pauseIcon) pauseIcon.textContent = playing ? '❚❚' : '▶';
+    root.classList.toggle('is-paused', !playing);
+  }
+
+  function setPlaying(value) {
+    playing = value && !reduceMotion.matches;
+    if (playing) hasPlayed = true;
+    if (!playing) glideTo(nearest(offset));
+    render();
+    schedule();
+  }
+
+  if (pauseButton) pauseButton.addEventListener('click', () => setPlaying(!playing));
+  if (prevButton) prevButton.addEventListener('click', () => moveBy(-1));
+  if (nextButton) nextButton.addEventListener('click', () => moveBy(1));
 
   root.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowRight') { event.preventDefault(); if (!manual) setManual(true); nudge(1); }
-    if (event.key === 'ArrowLeft') { event.preventDefault(); if (!manual) setManual(true); nudge(-1); }
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    if (playing) setPlaying(false);
+    moveBy(event.key === 'ArrowRight' ? 1 : -1);
   });
 
-  // Only a genuine width change matters. Mobile browsers fire resize when
-  // the address bar hides on scroll, and reacting to that is what made the
-  // carousel jump back to the start mid-scroll.
-  window.addEventListener('resize', () => {
-    if (window.innerWidth === lastWidth) return;
-    lastWidth = window.innerWidth;
-    measure();
-    snap();
-    applyOffset();
-  }, { passive: true });
+  /* ---- Pausing while someone is using it ---- */
 
-  setManual(manual);
-  applyOffset();
-  requestAnimationFrame(step);
+  viewport.addEventListener('pointerenter', (event) => {
+    if (event.pointerType === 'mouse') { hovered = true; schedule(); }
+  });
+  viewport.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse') { hovered = false; schedule(); }
+  });
+
+  // A keyboard user tabbing onto a slide that is off screen: stop, and
+  // bring it into view. Browsers otherwise scroll the clipped container
+  // behind our back, which knocks the loop out of line.
+  track.addEventListener('focusin', (event) => {
+    focused = true;
+    viewport.scrollLeft = 0;
+    const slide = event.target.closest('[data-slide]');
+    const index = originals.indexOf(slide);
+    if (index >= 0 && !staticStrip) {
+      const first = originals[0];
+      const room = viewport.clientWidth - first.offsetLeft;
+      const left = positions[index] - offset;
+      if (left < 0 || left + slide.offsetWidth > room) glideTo(positions[index]);
+    }
+    schedule();
+  });
+  track.addEventListener('focusout', (event) => {
+    if (!track.contains(event.relatedTarget)) { focused = false; schedule(); }
+  });
+
+  /* ---- Swipe and drag ---- */
+
+  let pointer = null;
+  let suppressClickUntil = 0;
+
+  viewport.addEventListener('pointerdown', (event) => {
+    if (staticStrip || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, start: offset, decided: false };
+  });
+
+  viewport.addEventListener('pointermove', (event) => {
+    if (!pointer || event.pointerId !== pointer.id) return;
+    const dx = event.clientX - pointer.x;
+    const dy = event.clientY - pointer.y;
+    if (!pointer.decided) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { pointer = null; return; } // page scroll wins
+      if (Math.abs(dx) < 8 || Math.abs(dx) <= Math.abs(dy)) return;
+      pointer.decided = true;
+      dragging = true;
+      tween = null;
+      pointer.start = offset + dx; // no jump at the moment the drag is recognised
+      try { viewport.setPointerCapture(event.pointerId); } catch { /* not all pointers can be captured */ }
+    }
+    offset = wrap(pointer.start - dx);
+    apply();
+  });
+
+  const endDrag = (event) => {
+    if (!pointer || event.pointerId !== pointer.id) return;
+    const wasDragging = pointer.decided;
+    const dx = event.clientX - pointer.x;
+    pointer = null;
+    if (!wasDragging) return;
+    dragging = false;
+    suppressClickUntil = Date.now() + 400;
+    // A flick of more than 40px moves one business in that direction;
+    // anything less settles on the closest one.
+    if (dx < -40) moveBy(1);
+    else if (dx > 40) moveBy(-1);
+    else glideTo(nearest(offset));
+    schedule();
+  };
+  viewport.addEventListener('pointerup', endDrag);
+  viewport.addEventListener('pointercancel', endDrag);
+
+  // A drag that ends over a link must not open it.
+  track.addEventListener('click', (event) => {
+    if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
+  track.addEventListener('dragstart', (event) => event.preventDefault());
+
+  /* ---- Visibility, size and preferences ---- */
+
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver((entries) => {
+      onScreen = entries.some((entry) => entry.isIntersecting);
+      schedule();
+    }).observe(root);
+  }
+  document.addEventListener('visibilitychange', schedule);
+
+  // Only a real change of width matters. Phones fire resize when the
+  // address bar slides away during scrolling; reacting to that is what
+  // used to make carousels jump back to the start.
+  const onResize = () => { if (viewport.clientWidth !== lastWidth) layout(); };
+  if ('ResizeObserver' in window) new ResizeObserver(onResize).observe(viewport);
+  else window.addEventListener('resize', onResize, { passive: true });
+
+  const onMotionChange = () => { if (reduceMotion.matches) playing = false; render(); schedule(); };
+  if (reduceMotion.addEventListener) reduceMotion.addEventListener('change', onMotionChange);
+
+  layout();
+  schedule();
 }
 
 /* ------------------------------------------------------------------ */
@@ -508,6 +598,7 @@ const TOWN_KEY = 'pp_town';
  * town, the business directory did not.
  */
 function rememberTown(slug) {
+  // "all" is remembered as a choice too. An empty slug forgets the choice.
   const oneYear = 60 * 60 * 24 * 365;
   const secure = location.protocol === 'https:' ? '; Secure' : '';
   if (slug) {
@@ -515,6 +606,22 @@ function rememberTown(slug) {
   } else {
     document.cookie = `${TOWN_KEY}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
   }
+}
+
+/**
+ * A town page remembers itself. Someone who arrives at /malvern from a
+ * search result and then taps Home should land back in Malvern, not be
+ * asked again or shown a different town.
+ */
+function initRememberTown() {
+  const marker = document.querySelector('[data-remember-town]');
+  if (marker && marker.dataset.townSlug) rememberTown(marker.dataset.townSlug);
+
+  // The first-visit chooser and any other town link that sets the choice.
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest && event.target.closest('[data-town-choice]');
+    if (link) rememberTown(link.dataset.townSlug || '');
+  });
 }
 
 function initTownPicker() {
@@ -563,75 +670,21 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function renderDealCard(item) {
-  const art = item.image
-    ? `<div class="art${item.isLogoArt ? ' is-logo' : ''}">
-         <img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.merchantName)}"
-              width="380" height="238" loading="lazy" decoding="async">
-       </div>`
-    : `<div class="art"><div class="art-fallback" aria-hidden="true">
-         <span>${escapeHtml(item.initials)}</span></div></div>`;
-
-  const code = item.couponCode
-    ? `<div class="stitch-panel code-panel">
-         <span class="code-label">Code</span>
-         <span class="code-value">${escapeHtml(item.couponCode)}</span>
-       </div>` : '';
-
-  // Same loud band as the server-rendered cards. Search results that quietly
-  // dropped it would make a business look like it has one offer.
-  const more = item.siblingCount > 0
-    ? `<a class="more-band" href="${escapeHtml(item.merchantHref)}">
-         <span class="mb-text">See ${item.siblingCount} more ${item.siblingCount === 1 ? 'deal' : 'deals'} from ${escapeHtml(item.merchantName)}</span>
-         <span class="mb-arrow" aria-hidden="true">&rarr;</span>
-       </a>`
-    : '';
-
-  return `<article class="deal-card card" data-deal-id="${escapeHtml(item.dealId)}"
-            data-merchant-id="${escapeHtml(item.merchantId)}" data-track-impression>
-      ${art}
-      <div class="body">
-        <p class="merchant-line">
-          <span class="merchant-name">${escapeHtml(item.merchantName)}</span>
-          ${item.categoryName ? `<span class="dot" aria-hidden="true"></span><span class="cat">${escapeHtml(item.categoryName)}</span>` : ''}
-        </p>
-        <h3 class="headline"><a href="${escapeHtml(item.href)}" class="stretch">${escapeHtml(item.headline)}</a></h3>
-        ${item.description ? `<p class="desc">${escapeHtml(item.description)}</p>` : ''}
-        ${code}
-        ${more}
-        <div class="meta">
-          ${item.expiry ? `<span class="expiry">${escapeHtml(item.expiry)}</span>` : ''}
-          <span class="see">See deal</span>
-        </div>
-      </div>
-    </article>`;
-}
-
-function renderMerchantCard(item) {
-  const logo = item.image
-    ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}" width="68" height="68" loading="lazy">`
-    : `<span class="logo-fallback" aria-hidden="true">${escapeHtml(item.initials)}</span>`;
-
-  const meta = [item.categoryName, item.townName].filter(Boolean).join(' · ');
-
-  return `<article class="merchant-card card" data-merchant-id="${escapeHtml(item.merchantId)}">
-      <div class="head">
-        <div class="logo">${logo}</div>
-        <div class="head-text">
-          <h3 class="name"><a href="${escapeHtml(item.href)}" class="stretch">${escapeHtml(item.name)}</a></h3>
-          ${meta ? `<p class="cat">${escapeHtml(meta)}</p>` : ''}
-        </div>
-      </div>
-      ${item.tagline ? `<p class="tagline">${escapeHtml(item.tagline)}</p>` : ''}
-      <div class="meta">
-        ${item.status ? `<span class="status">${escapeHtml(item.status)}</span>` : ''}
-        ${item.dealCount ? '' : '<span class="note">No deals right now</span>'}
-      </div>
-      ${item.dealCount ? `<a class="more-band more-band-soft" href="${escapeHtml(item.href)}">
-         <span class="mb-text">See ${item.dealCount} ${item.dealCount === 1 ? 'deal' : 'deals'} from ${escapeHtml(item.name)}</span>
-         <span class="mb-arrow" aria-hidden="true">&rarr;</span>
-       </a>` : ''}
-    </article>`;
+/**
+ * Live results come back as HTML rendered by the same components as the
+ * page itself (see /search-results), so a search result can never look or
+ * behave differently from the card it replaces.
+ */
+async function fetchResultsHtml(term) {
+  const params = new URLSearchParams(location.search);
+  params.set('q', term);
+  params.delete('page');
+  const response = await fetch(`/search-results?${params.toString()}`, { headers: { Accept: 'text/html' } });
+  if (!response.ok) throw new Error(`search ${response.status}`);
+  return {
+    html: await response.text(),
+    total: parseInt(response.headers.get('x-result-count') || '0', 10) || 0,
+  };
 }
 
 async function fetchResults(term) {
@@ -639,18 +692,25 @@ async function fetchResults(term) {
   params.set('q', term);
   params.delete('page');
   const response = await fetch(`/api/search?${params.toString()}`);
+  if (!response.ok) throw new Error(`search ${response.status}`);
   return response.json();
 }
 
-/** Debounced: one request per typing pause, not one per keystroke. */
-function onTyping(input, handler, wait = 220) {
+/**
+ * Debounced: one request per typing pause, not one per keystroke.
+ *
+ * `interceptSubmit` is for the results grids, which update in place. The
+ * homepage box must NOT intercept: pressing Search there should go to the
+ * full results page, not just reopen the suggestion list.
+ */
+function onTyping(input, handler, { wait = 220, interceptSubmit = false } = {}) {
   let timer = null;
   input.addEventListener('input', () => {
     clearTimeout(timer);
     timer = setTimeout(handler, wait);
   });
   const form = input.closest('form');
-  if (form) {
+  if (form && interceptSubmit) {
     form.addEventListener('submit', (event) => {
       if (input.value.trim().length >= 2) { event.preventDefault(); clearTimeout(timer); handler(); }
     });
@@ -673,8 +733,10 @@ function initGridSearch() {
 
   const restore = () => {
     target.innerHTML = initialHtml;
+    target.removeAttribute('aria-busy');
     if (counter) counter.textContent = initialCount;
     extras.forEach((el) => { el.hidden = false; });
+    initImageFallbacks(target);
   };
 
   onTyping(input, async () => {
@@ -685,29 +747,22 @@ function initGridSearch() {
     // Sections that describe the unfiltered page would contradict the
     // results while a search is showing.
     extras.forEach((el) => { el.hidden = true; });
+    target.setAttribute('aria-busy', 'true');
 
     try {
-      const data = await fetchResults(term);
+      const { html, total } = await fetchResultsHtml(term);
       if (ticket !== latest) return;
-
-      const cards = [
-        ...(data.deals || []).map(renderDealCard),
-        ...(data.merchants || []).map(renderMerchantCard),
-      ];
-
-      target.innerHTML = cards.length
-        ? cards.join('')
-        : `<p class="search-empty">Nothing matches &ldquo;${escapeHtml(term)}&rdquo;. Try a business name, a town, or what you are looking for.</p>`;
-
-      if (counter) {
-        counter.textContent = `${data.total} ${data.total === 1 ? 'result' : 'results'} for “${term}”`;
-      }
+      target.innerHTML = html;
+      target.removeAttribute('aria-busy');
+      initImageFallbacks(target);
+      if (counter) counter.textContent = `${total} ${total === 1 ? 'result' : 'results'} for “${term}”`;
     } catch {
       if (ticket === latest) {
+        target.removeAttribute('aria-busy');
         target.innerHTML = '<p class="search-empty">Search is unavailable right now. Try again in a moment.</p>';
       }
     }
-  });
+  }, { interceptSubmit: true });
 }
 
 /** Suggestion list under the homepage box. */
@@ -730,22 +785,15 @@ function initSuggestSearch() {
       const data = await fetchResults(term);
       if (ticket !== latest) return;
 
-      const rows = [
-        ...(data.deals || []).slice(0, 5).map((d) => `
-          <li><a href="${escapeHtml(d.href)}">
-            <span class="sg-main">${escapeHtml(d.headline)}</span>
-            <span class="sg-sub">${escapeHtml(d.merchantName)}${d.townName ? ' · ' + escapeHtml(d.townName) : ''}</span>
-          </a></li>`),
-        ...(data.merchants || []).slice(0, 4).map((m) => `
-          <li><a href="${escapeHtml(m.href)}">
-            <span class="sg-main">${escapeHtml(m.name)}</span>
-            <span class="sg-sub">${escapeHtml([m.categoryName, m.townName].filter(Boolean).join(' · '))}</span>
-          </a></li>`),
-      ];
+      const rows = (data.results || []).slice(0, 7).map((r) => `
+          <li><a href="${escapeHtml(r.href)}">
+            <span class="sg-main">${escapeHtml(r.title)}</span>
+            <span class="sg-sub">${escapeHtml(r.subtitle)}</span>
+          </a></li>`);
 
       panel.innerHTML = rows.length
         ? `<ul class="list-plain">${rows.join('')}</ul>
-           <a class="sg-all" href="/deals?q=${encodeURIComponent(term)}">See all ${data.total} results</a>`
+           <a class="sg-all" href="/deals?q=${encodeURIComponent(term)}">See all results</a>`
         : `<p class="sg-none">Nothing matches &ldquo;${escapeHtml(term)}&rdquo; yet.</p>`;
       panel.hidden = false;
       input.setAttribute('aria-expanded', 'true');
@@ -764,6 +812,36 @@ function initSuggestSearch() {
       if (first) { event.preventDefault(); first.focus(); }
     }
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Broken images                                                       */
+/*                                                                     */
+/* A missing or broken business image swaps to the initials tile the   */
+/* frame already carries, rather than showing the browser's broken-    */
+/* image icon or collapsing the card. Images that failed before this   */
+/* script ran are caught by checking each one on start.                */
+/* ------------------------------------------------------------------ */
+
+function markBroken(img) {
+  const frame = img.closest('.mf');
+  if (!frame || frame.classList.contains('is-broken')) return;
+  frame.classList.add('is-broken');
+  const fallback = frame.querySelector('.mf-fallback');
+  if (fallback) fallback.hidden = false;
+}
+
+function initImageFallbacks(scope) {
+  (scope || document).querySelectorAll('img[data-mf-img]').forEach((img) => {
+    if (img.complete && img.naturalWidth === 0 && img.getAttribute('src')) markBroken(img);
+  });
+}
+
+function initImageErrorListener() {
+  document.addEventListener('error', (event) => {
+    const target = event.target;
+    if (target && target.tagName === 'IMG' && target.hasAttribute('data-mf-img')) markBroken(target);
+  }, true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -842,7 +920,10 @@ function initSearchTracking() {
  * Now one failure costs one feature, and says so in the console.
  */
 [
+  ['image errors', initImageErrorListener],
+  ['image fallbacks', () => initImageFallbacks()],
   ['page views', initPageViews],
+  ['remember town', initRememberTown],
   ['town picker', initTownPicker],
   ['grid search', initGridSearch],
   ['suggestions', initSuggestSearch],

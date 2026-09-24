@@ -1,50 +1,90 @@
 ---
 import Base from '../layouts/Base.astro';
-import { getSiteChrome, CACHE_STATIC } from '../lib/queries';
-Astro.response.headers.set('Cache-Control', CACHE_STATIC);
-const { settings } = await getSiteChrome();
+import { getSiteChrome } from '../lib/queries';
+import { cachePublic } from '../lib/http';
+
+/*
+ * DRAFT POLICY TEXT. Written to describe accurately what this codebase does,
+ * but it is not legal advice: have it reviewed for the actual business
+ * before relying on it, and update it whenever the site starts collecting
+ * something new.
+ */
+cachePublic(Astro);
+const { settings } = await getSiteChrome(Astro.locals);
 const email = settings['contact.email'] as string | undefined;
+const siteName = (settings['site.name'] as string) || 'Pocket Perks';
 const updated = 'September 2026';
 ---
 
-<Base title="Privacy" description="What Pocket Perks collects, why, and how to remove it."
+<Base title="Privacy" description={`What ${siteName} collects, why, and how to have it removed.`}
       canonicalPath="/privacy"
       breadcrumbs={[{ name: 'Home', href: '/' }, { name: 'Privacy', href: '/privacy' }]}>
   <div class="wrap section prose">
     <h1>Privacy</h1>
     <p class="muted">Last updated {updated}.</p>
 
-    <h2>What we collect</h2>
     <p>
-      If you join the email list, we store your address, the date, and which page
-      you signed up from. That is the only personal information we ask for.
+      {siteName} is a free directory of local deals. You can use all of it without
+      an account and without giving us any personal information. This page lists
+      everything the site does collect.
     </p>
 
-    <h2>What we measure</h2>
+    <h2>If you join the email list</h2>
     <p>
-      We count how often deals are seen and how often people tap Call, Directions,
-      a website link, or a coupon code. This is what we show the businesses that
-      pay to be listed, so they can see whether it is working.
+      We store your email address, the date, which page you signed up from, and
+      the wording you agreed to when you signed up. We use it only to send local
+      deals. Every email includes a way to unsubscribe, and you can also ask us to
+      remove you (see below).
+    </p>
+
+    <h2>If a business sends us an enquiry</h2>
+    <p>
+      The “List your business” form sends us the business name, your name, phone
+      number, email address, town and any message. We use it only to reply.
+    </p>
+
+    <h2>What we count</h2>
+    <p>
+      To show participating businesses whether their listing is working, we count
+      how often their deals are shown and how often people open a deal or tap
+      Call, Directions, a website link, a coupon code or Share. We also count
+      searches, without recording who searched.
     </p>
     <p>
-      We do not store your IP address. To avoid counting the same person twice in
-      a day, we create a one-way scrambled code from your connection and browser.
-      The recipe for that code changes every day, so the code cannot be used to
-      follow you from one day to the next, and it cannot be turned back into
-      anything that identifies you.
+      We do not store your IP address. To avoid counting the same visit twice, the
+      server turns your connection and browser type into a one-way scrambled code.
+      The recipe changes every day, so the code cannot follow you from one day to
+      the next and cannot be turned back into anything that identifies you. The
+      same kind of scrambled code is stored with email signups and business
+      enquiries so we can stop automated abuse of those forms.
     </p>
-    <p>We do not use advertising trackers, and we do not sell or share your data.</p>
 
     <h2>Cookies</h2>
     <p>
-      Pocket Perks does not set advertising or analytics cookies. Anything the
-      site remembers stays in your own browser.
+      One cookie, named <code>pp_town</code>, remembers which town you chose so we
+      can show you deals from there. It holds only the town’s name, lasts a year,
+      and is not used for advertising or tracking. Administrators who sign in to
+      manage the site also receive sign-in cookies. We use no advertising or
+      analytics cookies, and no third-party trackers.
     </p>
 
-    <h2>Getting removed</h2>
+    <h2>Who else is involved</h2>
     <p>
-      Every email has an unsubscribe link. You can also write to us and we will
-      delete your address.
+      The site runs on Netlify (hosting) and Supabase (database), which process
+      data on our behalf. Fonts and images are served from the site itself or its
+      database. When you tap Get directions, Google Maps opens and Google’s own
+      privacy policy applies there. Links to a business’s website or social pages
+      take you to sites we do not control.
+    </p>
+    <p>We do not sell or rent personal information, and we do not share it for advertising.</p>
+
+    <h2>Children</h2>
+    <p>The site is for a general audience and is not directed at children under 13.</p>
+
+    <h2>Getting your information removed</h2>
+    <p>
+      Use the unsubscribe link in any email, or write to us and we will remove your
+      address or answer any question about the information we hold.
     </p>
     {email && <p><a href={`mailto:${email}?subject=Privacy%20request`}>{email}</a></p>}
   </div>
@@ -54,4 +94,5 @@ const updated = 'September 2026';
   .prose { max-width: 44rem; }
   .prose h2 { font-size: var(--pp-text-xl); margin-top: var(--pp-space-6); }
   .prose p { color: var(--pp-muted); }
+  .prose code { background: var(--pp-deep-050); padding: 0.05em 0.35em; border-radius: 4px; }
 </style>

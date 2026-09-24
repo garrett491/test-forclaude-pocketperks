@@ -1,0 +1,86 @@
+---
+import Base from '../layouts/Base.astro';
+import { getSiteChrome } from '../lib/queries';
+import { cachePublic } from '../lib/http';
+
+/*
+ * DRAFT TERMS. A sensible, plain-language starting point written for how
+ * this site actually works — not legal advice, and not guaranteed to suit
+ * every jurisdiction. Have them reviewed for the actual business (the
+ * governing-law line in particular) before relying on them.
+ */
+cachePublic(Astro);
+const { settings } = await getSiteChrome(Astro.locals);
+const email = settings['contact.email'] as string | undefined;
+const siteName = (settings['site.name'] as string) || 'Pocket Perks';
+const updated = 'September 2026';
+---
+
+<Base title="Terms of use" description={`The terms for using ${siteName}.`}
+      canonicalPath="/terms"
+      breadcrumbs={[{ name: 'Home', href: '/' }, { name: 'Terms of use', href: '/terms' }]}>
+  <div class="wrap section prose">
+    <h1>Terms of use</h1>
+    <p class="muted">Last updated {updated}.</p>
+
+    <p>
+      {siteName} lists deals offered by local businesses. By using the site you
+      agree to these terms. If you do not agree, please do not use it.
+    </p>
+
+    <h2>Deals are offered by the businesses</h2>
+    <p>
+      Each deal is set by the business that offers it, which decides its terms,
+      limits and how it is honoured. {siteName} publishes deals on the businesses’
+      behalf and is not the seller. We work to keep listings accurate and remove
+      offers when their end date passes, but a business may change or end an offer
+      at any time. If anything matters to you — price, hours, availability — check
+      with the business before you go.
+    </p>
+
+    <h2>Using a deal</h2>
+    <p>
+      Unless a deal says otherwise, show it on your phone at the business. Deals
+      have no cash value, cannot be sold, and are subject to the terms shown with
+      them and any the business applies at the counter.
+    </p>
+
+    <h2>Names, logos and pictures</h2>
+    <p>
+      Business names, logos and photos belong to the businesses they identify and
+      are shown with their permission to identify them. Showing them does not mean
+      {siteName} owns them or that a business endorses anything beyond its own
+      listing. {siteName} is not affiliated with any town or government body whose
+      name appears on the site.
+    </p>
+
+    <h2>Fair use of the site</h2>
+    <p>
+      Please do not misuse the site: no automated scraping at a volume that harms
+      it, no attempts to get around its security, and no submitting forms with
+      false or someone else’s information.
+    </p>
+
+    <h2>Links to other sites</h2>
+    <p>Links to business websites, social pages and maps take you to sites we do not control.</p>
+
+    <h2>No warranty</h2>
+    <p>
+      The site is provided as it is. To the extent the law allows, {siteName} is
+      not liable for a business’s refusal or failure to honour a deal, or for
+      losses arising from use of the site.
+    </p>
+
+    <h2>Changes</h2>
+    <p>We may update these terms. The date at the top shows when they last changed.</p>
+
+    <h2>Contact</h2>
+    {email ? <p><a href={`mailto:${email}?subject=Terms%20question`}>{email}</a></p> : <p>Use the contact details in the footer.</p>}
+  </div>
+</Base>
+
+<style>
+  .prose { max-width: 44rem; }
+  .prose h2 { font-size: var(--pp-text-xl); margin-top: var(--pp-space-6); }
+  .prose p { color: var(--pp-muted); }
+</style>

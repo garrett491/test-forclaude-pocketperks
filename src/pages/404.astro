@@ -1,19 +1,23 @@
 ---
 import Base from '../layouts/Base.astro';
-import { CACHE_STATIC } from '../lib/queries';
-Astro.response.headers.set('Cache-Control', CACHE_STATIC);
+import { cacheNotFound } from '../lib/http';
+
+// A real 404 status, cached for a minute only. The old day-long cache meant
+// a business page that was briefly missing — or a slug typed before the
+// business was published — stayed "not found" at the CDN for 24 hours.
+cacheNotFound(Astro);
 ---
 
 <Base title="Page not found" noindex={true} canonicalPath="/404">
   <div class="wrap section notfound">
-    <h1>That page is not here</h1>
+    <h1>That page isn’t here</h1>
     <p>
-      The deal may have ended, or the link may be mistyped. Everything that is
-      running right now is one tap away.
+      The deal may have ended, the business may have moved, or the link may be
+      mistyped. Everything running right now is one tap away.
     </p>
     <div class="row">
-      <a class="btn btn-primary" href="/deals">Browse deals</a>
-      <a class="btn btn-outline" href="/businesses">See businesses</a>
+      <a class="btn btn-primary" href="/">See today’s deals</a>
+      <a class="btn btn-outline" href="/businesses">Browse businesses</a>
     </div>
   </div>
 </Base>
@@ -25,4 +29,5 @@ Astro.response.headers.set('Cache-Control', CACHE_STATIC);
     display: flex; flex-direction: column; align-items: center; gap: var(--pp-space-3);
   }
   .notfound p { color: var(--pp-muted); }
+  .notfound .row { justify-content: center; }
 </style>

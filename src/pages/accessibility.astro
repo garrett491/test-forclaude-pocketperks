@@ -1,0 +1,67 @@
+---
+import Base from '../layouts/Base.astro';
+import { getSiteChrome } from '../lib/queries';
+import { cachePublic } from '../lib/http';
+
+/*
+ * An accessibility statement and a way to report problems. It describes
+ * the target and the measures actually built in; it does not claim
+ * certified conformance, which only a manual audit could support.
+ */
+cachePublic(Astro);
+const { settings } = await getSiteChrome(Astro.locals);
+const email = settings['contact.email'] as string | undefined;
+const phone = settings['contact.phone_display'] as string | undefined;
+const siteName = (settings['site.name'] as string) || 'Pocket Perks';
+const updated = 'September 2026';
+---
+
+<Base title="Accessibility" description={`${siteName}'s commitment to an accessible website, and how to tell us about a problem.`}
+      canonicalPath="/accessibility"
+      breadcrumbs={[{ name: 'Home', href: '/' }, { name: 'Accessibility', href: '/accessibility' }]}>
+  <div class="wrap section prose">
+    <h1>Accessibility</h1>
+    <p class="muted">Last updated {updated}.</p>
+
+    <p>
+      We want everyone to be able to find and use a local deal, including people
+      who use a screen reader, a keyboard, voice control, zoom or larger text. We
+      aim to meet the Web Content Accessibility Guidelines (WCAG) 2.2 at level AA.
+    </p>
+
+    <h2>What we have done</h2>
+    <ul>
+      <li>Every page works with a keyboard alone, with a visible focus outline and a “Skip to content” link.</li>
+      <li>Pages use real headings, lists, buttons and links, so screen readers can navigate them.</li>
+      <li>Text and controls meet AA colour-contrast levels, and buttons are large enough to tap.</li>
+      <li>The featured slideshow can be paused, moved by hand and swiped, and it stays still for anyone whose device asks for reduced motion.</li>
+      <li>Pages stay usable when zoomed to 200% or with larger text, on phones and desktops.</li>
+      <li>Forms have labels, and errors are explained in words, not just colour.</li>
+      <li>Deal details are written as text, not only inside pictures.</li>
+    </ul>
+
+    <h2>What we know is not perfect</h2>
+    <p>
+      Logos, photos and flyers are supplied by the businesses. We ask for a text
+      description of each and include the important details of every deal as text,
+      but a picture may occasionally contain wording that is not repeated
+      elsewhere. If you find one, tell us and we will fix it.
+    </p>
+
+    <h2>Tell us about a problem</h2>
+    <p>
+      If anything on {siteName} is hard to use, please let us know what page and
+      what happened. We will reply and, where we can, provide the information
+      another way while we fix it.
+    </p>
+    {email && <p><a class="btn btn-primary" href={`mailto:${email}?subject=Accessibility%20problem`}>Email {email}</a></p>}
+    {phone && <p>Or call <a href={`tel:${phone.replace(/[^0-9+]/g, '')}`}>{phone}</a>.</p>}
+  </div>
+</Base>
+
+<style>
+  .prose { max-width: 44rem; }
+  .prose h2 { font-size: var(--pp-text-xl); margin-top: var(--pp-space-6); }
+  .prose p, .prose li { color: var(--pp-muted); }
+  .prose ul { padding-left: 1.2rem; display: flex; flex-direction: column; gap: var(--pp-space-2); margin-bottom: var(--pp-space-4); }
+</style>

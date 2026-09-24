@@ -1,7 +1,7 @@
 ---
 import Admin from '../../../layouts/Admin.astro';
-import { str, bool, int, timestamp, toLocalInput, humanError } from '../../../lib/admin';
-import { dayName } from '../../../lib/format';
+import { str, bool, int, timestamp, writeFailure } from '../../../lib/admin';
+import { dayName, formatDate } from '../../../lib/format';
 import ImageUpload from '../../../components/ImageUpload.astro';
 import { imageUrl } from '../../../lib/format';
 
@@ -13,11 +13,16 @@ const isNew = id === 'new';
 
 let error: string | null = null;
 let success: string | null = null;
+/** What was typed, kept when a save fails so nothing has to be re-entered. */
+let submitted: FormData | null = null;
 
-const [{ data: categories }, { data: towns }] = await Promise.all([
+const [{ data: categories }, { data: towns }, carouselProbe] = await Promise.all([
   db.from('categories').select('id, name').order('sort_order'),
   db.from('towns').select('id, name, state_code').order('sort_order'),
+  db.from('merchants').select('show_in_carousel').limit(1),
 ]);
+/** False until migration 0009 has been run; the switch is hidden until then. */
+const carouselSupported = !carouselProbe.error;
 
 /* ------------------------------------------------------------------ */
 /* Save                                                                */
@@ -32,31 +37,32 @@ if (Astro.request.method === 'POST') {
     if (!mediaId) {
       error = 'Choose a photo first.';
     } else {
-      const { error: galleryError } = await db.from('merchant_gallery').insert({
+      const altText = str(form, 'gallery_media_id_alt');
+      if (altText !== null) await db.from('media').update({ alt_text: altText }).eq('id', mediaId);
+      const result = await db.from('merchant_gallery').insert({
         merchant_id: id,
         media_id: mediaId,
         caption: str(form, 'gallery_caption'),
         sort_order: int(form, 'gallery_sort', 50),
-      });
+      }).select('id');
       // The tier trigger raises a message already written for a human.
-      if (galleryError) error = humanError(galleryError);
-      else success = 'Photo added.';
+      error = writeFailure(result);
+      if (!error) success = 'Photo added.';
     }
   } else if (intent === 'gallery-remove' && !isNew) {
     const rowId = str(form, 'gallery_id');
     if (rowId) {
-      const { error: removeError } = await db.from('merchant_gallery').delete().eq('id', rowId);
-      if (removeError) error = humanError(removeError);
-      else success = 'Photo removed.';
+      error = writeFailure(await db.from('merchant_gallery').delete().eq('id', rowId).eq('merchant_id', id).select('id'));
+      if (!error) success = 'Photo removed.';
     }
   } else if (intent === 'gallery-order' && !isNew) {
     const rowId = str(form, 'gallery_id');
     if (rowId) {
-      await db.from('merchant_gallery').update({
+      error = writeFailure(await db.from('merchant_gallery').update({
         sort_order: int(form, 'gallery_sort'),
         caption: str(form, 'gallery_caption'),
-      }).eq('id', rowId);
-      success = 'Photo updated.';
+      }).eq('id', rowId).eq('merchant_id', id).select('id'));
+      if (!error) success = 'Photo updated.';
     }
   } else if (intent === 'deal-quick' && !isNew) {
     /**
@@ -71,24 +77,24 @@ if (Astro.request.method === 'POST') {
     if (!headline) {
       error = 'Give the deal a headline.';
     } else {
-      const { error: dealError } = await db.from('deals').insert({
+      const status = String(form.get('deal_status') ?? 'draft');
+      error = writeFailure(await db.from('deals').insert({
         merchant_id: id,
         headline,
         description: str(form, 'deal_description'),
         coupon_code: str(form, 'deal_code'),
+        ...(str(form, 'deal_restrictions') ? { restrictions: str(form, 'deal_restrictions') } : {}),
         ends_at: timestamp(form, 'deal_ends_at'),
-        status: String(form.get('deal_status') ?? 'draft'),
-      });
-      if (dealError) error = humanError(dealError);
-      else success = 'Deal added.';
+        status: ['draft', 'active'].includes(status) ? status : 'draft',
+      }).select('id'));
+      if (!error) success = 'Deal added.';
     }
   } else if (intent === 'deal-status' && !isNew) {
     const dealId = str(form, 'deal_id');
     const status = String(form.get('status') ?? '');
     if (dealId && ['draft', 'active', 'paused', 'archived'].includes(status)) {
-      const { error: statusError } = await db.from('deals').update({ status }).eq('id', dealId);
-      if (statusError) error = humanError(statusError);
-      else success = 'Deal updated.';
+      error = writeFailure(await db.from('deals').update({ status }).eq('id', dealId).eq('merchant_id', id).select('id'));
+      if (!error) success = status === 'active' ? 'Deal is live.' : `Deal set to ${status}.`;
     }
   } else if (intent === 'archive' && !isNew) {
     /**
@@ -96,13 +102,12 @@ if (Astro.request.method === 'POST') {
      * this is the only removal path — and it keeps historical analytics and
      * any link already printed on a flyer intact.
      */
-    const { error: archiveError } = await db
-      .from('merchants').update({ status: 'archived' }).eq('id', id);
-    if (archiveError) error = humanError(archiveError);
-    else return Astro.redirect(
+    error = writeFailure(await db.from('merchants').update({ status: 'archived' }).eq('id', id).select('id'));
+    if (!error) return Astro.redirect(
       `/admin/merchants?saved=${encodeURIComponent('Business archived. It is no longer on the site.')}`, 302
     );
   } else {
+    submitted = form;
     const name = str(form, 'name');
     const categoryId = str(form, 'category_id');
     const townId = str(form, 'town_id');
@@ -112,6 +117,22 @@ if (Astro.request.method === 'POST') {
     if (!name) error = 'Give the business a name.';
     else if (!categoryId) error = 'Pick a category.';
     else if (!townId) error = 'Pick a town.';
+
+    // Opening hours: a day with only one of its two times is almost always
+    // a slip. Say so, rather than quietly dropping the day on save.
+    const halfDays: string[] = [];
+    for (let day = 0; day < 7; day++) {
+      if (bool(form, `closed_${day}`)) continue;
+      if (!!str(form, `opens_${day}`) !== !!str(form, `closes_${day}`)) halfDays.push(dayName(day));
+    }
+    if (!error && halfDays.length) {
+      error = `${halfDays.join(', ')}: add both an opening and a closing time, tick Closed, or clear both.`;
+    }
+    const lat = str(form, 'latitude');
+    const lng = str(form, 'longitude');
+    if (!error && ((lat && !Number.isFinite(Number(lat))) || (lng && !Number.isFinite(Number(lng))))) {
+      error = 'Latitude and longitude must be numbers, like 40.5730 and -81.0860. Leave both blank if unsure.';
+    }
 
     if (!error) {
       const payload = {
@@ -133,6 +154,7 @@ if (Astro.request.method === 'POST') {
         instagram_url: str(form, 'instagram_url'),
         tier: String(form.get('tier') ?? 'standard'),
         is_featured: bool(form, 'is_featured'),
+        ...(carouselSupported ? { show_in_carousel: bool(form, 'show_in_carousel') } : {}),
         display_priority: int(form, 'display_priority'),
         status: String(form.get('status') ?? 'draft'),
         seo_title: str(form, 'seo_title'),
@@ -146,17 +168,19 @@ if (Astro.request.method === 'POST') {
       for (const [idKey, altKey] of [['logo_media_id', 'logo_media_id_alt'], ['cover_media_id', 'cover_media_id_alt']]) {
         const mediaId = str(form, idKey);
         const alt = str(form, altKey);
-        if (mediaId) await db.from('media').update({ alt_text: alt ?? '' }).eq('id', mediaId);
+        if (mediaId) {
+          const altError = writeFailure(await db.from('media').update({ alt_text: alt ?? '' }).eq('id', mediaId).select('id'), false);
+          if (altError) error = altError;
+        }
       }
 
-      const result = isNew
+      const result = error ? null : isNew
         ? await db.from('merchants').insert(payload).select('id').maybeSingle()
         : await db.from('merchants').update(payload).eq('id', id).select('id').maybeSingle();
 
-      if (result.error) {
-        error = humanError(result.error);
-      } else {
-        const merchantId = result.data?.id ?? id;
+      if (result) error = writeFailure(result);
+      if (result && !error) {
+        const merchantId = (result.data as { id: string } | null)?.id ?? id;
 
         // Hours are replaced wholesale. Seven rows is cheaper to rewrite
         // than to diff, and it cannot leave a stale day behind.
@@ -168,15 +192,17 @@ if (Astro.request.method === 'POST') {
           if (closed) rows.push({ merchant_id: merchantId, day_of_week: day, is_closed: true, opens_at: null, closes_at: null });
           else if (opens && closes) rows.push({ merchant_id: merchantId, day_of_week: day, is_closed: false, opens_at: opens, closes_at: closes });
         }
-        await db.from('merchant_hours').delete().eq('merchant_id', merchantId);
-        if (rows.length) await db.from('merchant_hours').insert(rows);
+        const cleared = await db.from('merchant_hours').delete().eq('merchant_id', merchantId);
+        error = writeFailure(cleared, false);
+        if (!error && rows.length) error = writeFailure(await db.from('merchant_hours').insert(rows).select('id'));
+        if (error) error = `The business was saved, but its opening hours were not: ${error}`;
 
-        if (isNew) {
+        if (isNew && !error) {
           return Astro.redirect(
             `/admin/merchants/${merchantId}?saved=${encodeURIComponent('Business created.')}`, 302
           );
         }
-        success = 'Saved.';
+        if (!error) success = 'Saved. The public page shows the change straight away.';
       }
     }
   }
@@ -216,12 +242,40 @@ if (!isNew) {
 const flash = Astro.url.searchParams.get('saved');
 if (flash && !success) success = decodeURIComponent(flash);
 
+// Only a failed save keeps the typed values; a successful one shows the
+// saved record, which is the proof it worked.
+if (!error) submitted = null;
+
 const value = <T,>(key: string, fallback: T | string = ''): T | string =>
-  merchant?.[key] ?? fallback;
-const hoursFor = (day: number) => hours.find((h) => h.day_of_week === day);
+  submitted ? String(submitted.get(key) ?? fallback) : (merchant?.[key] ?? fallback);
+const checked = (key: string): boolean =>
+  submitted ? submitted.get(key) === 'on' : !!merchant?.[key];
+const hoursFor = (day: number) => {
+  if (!submitted) return hours.find((h) => h.day_of_week === day);
+  return {
+    opens_at: String(submitted.get(`opens_${day}`) ?? ''),
+    closes_at: String(submitted.get(`closes_${day}`) ?? ''),
+    is_closed: submitted.get(`closed_${day}`) === 'on',
+  };
+};
+
+// An image chosen before the failed save stays chosen.
+const imageFor = async (key: 'logo' | 'cover') => {
+  const current = merchant?.[key] ?? null;
+  if (!submitted) return current;
+  const id = String(submitted.get(`${key}_media_id`) ?? '');
+  if (!id) return null;
+  if (current?.id === id) return current;
+  const { data } = await db.from('media').select('id, bucket_id, storage_path, alt_text, width, height').eq('id', id).maybeSingle();
+  return data ?? null;
+};
+const [logoShown, coverShown] = await Promise.all([imageFor('logo'), imageFor('cover')]);
 const liveDealCap = merchant?.tier === 'standard' ? 2 : 3;
 const galleryCap = merchant?.tier === 'standard' ? 1 : merchant?.tier === 'pro' ? 3 : 9;
-const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').length;
+/** Live in the dashboard, but past its end date — so not on the site. */
+const hasEnded = (d: any) => d.status === 'active' && !!d.ends_at && new Date(d.ends_at).getTime() <= Date.now();
+const liveDealCount = merchantDeals.filter((d: any) =>
+  d.status === 'active' && (!d.ends_at || new Date(d.ends_at).getTime() > Date.now())).length;
 ---
 
 <Admin title={isNew ? 'Add business' : merchant.name} profile={profile}>
@@ -260,7 +314,7 @@ const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').le
           <select class="input" id="category_id" name="category_id" required>
             <option value="">Choose one</option>
             {(categories ?? []).map((c: any) => (
-              <option value={c.id} selected={merchant?.category_id === c.id}>{c.name}</option>
+              <option value={c.id} selected={value('category_id') === c.id}>{c.name}</option>
             ))}
           </select>
         </div>
@@ -270,7 +324,7 @@ const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').le
           <select class="input" id="town_id" name="town_id" required>
             <option value="">Choose one</option>
             {(towns ?? []).map((t: any) => (
-              <option value={t.id} selected={merchant?.town_id === t.id}>{t.name}, {t.state_code}</option>
+              <option value={t.id} selected={value('town_id') === t.id}>{t.name}, {t.state_code}</option>
             ))}
           </select>
         </div>
@@ -378,20 +432,21 @@ const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').le
     <fieldset class="group">
       <legend>Images</legend>
       <p class="hint hours-hint">
-        The logo appears on cards and at the top of their page. The cover photo
-        is the wide banner. Both are optional — without a logo the site shows
-        their initials on a green tile rather than a broken image.
+        The logo appears on cards and at the top of their page; the cover photo
+        at the top of their page and on their card. Both are optional — without
+        them the site shows the business’s initials on a plain tile. Only upload
+        images the business has given you permission to use.
       </p>
       <div class="form-grid cols-2">
         <ImageUpload
-          name="logo_media_id" label="Logo" aspect="square" maxEdge={600}
-          current={merchant?.logo ?? null}
-          hint="A square-ish logo works best. It is never cropped."
+          name="logo_media_id" label="Logo" aspect="square" maxEdge={800}
+          current={logoShown}
+          hint="Any shape works — wide, tall or square. It is always shown whole, never cropped. At least 300 pixels across looks sharp."
         />
         <ImageUpload
           name="cover_media_id" label="Cover photo" aspect="wide" maxEdge={1600}
-          current={merchant?.cover ?? null}
-          hint="A wide photo of the storefront, the food, the work — anything real."
+          current={coverShown}
+          hint="The storefront, the food, the work — anything real. Any shape; the whole photo always shows. Landscape suits cards best."
         />
       </div>
     </fieldset>
@@ -419,22 +474,29 @@ const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').le
         </div>
 
         <div class="field">
-          <label for="display_priority">Sort priority</label>
-          <input class="input" id="display_priority" name="display_priority" type="number"
-                 value={value('display_priority', 0)} />
-          <p class="hint">Higher shows first. Leave at 0 unless you need to push someone up.</p>
+          <label for="display_priority">Position in lists</label>
+          <input class="input" id="display_priority" name="display_priority" type="number" step="1"
+                 value={value('display_priority', 0)} aria-describedby="display_priority-hint" />
+          <p class="hint" id="display_priority-hint">Higher numbers show earlier. Leave at 0 unless you need to move someone up.</p>
         </div>
 
         <div class="field">
           <label class="switch">
-            <input type="checkbox" name="is_featured" checked={value('is_featured', false)} />
+            <input type="checkbox" name="is_featured" checked={checked('is_featured')} />
             <span>Featured</span>
           </label>
-          <p class="hint">
-            Featured is a Premium benefit — the homepage row and the badge.
-            You can switch it on for anyone if you are comping placement.
-          </p>
+          <p class="hint">Shows a “Featured” badge on their card and lists them first. A Premium benefit you can also comp.</p>
         </div>
+
+        {carouselSupported && (
+          <div class="field">
+            <label class="switch">
+              <input type="checkbox" name="show_in_carousel" checked={checked('show_in_carousel')} />
+              <span>Show in the featured carousel</span>
+            </label>
+            <p class="hint">The moving strip at the top of their town’s page. A Premium benefit.</p>
+          </div>
+        )}
       </div>
     </fieldset>
 
@@ -486,14 +548,19 @@ const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').le
                       <input type="hidden" name="intent" value="deal-status" />
                       <input type="hidden" name="deal_id" value={d.id} />
                       <select class="input tiny" name="status" aria-label={`Status for ${d.headline}`}>
-                        {['draft', 'active', 'paused', 'archived'].map((st) => (
-                          <option value={st} selected={d.status === st}>{st}</option>
+                        {[['draft', 'Draft'], ['active', 'Live'], ['paused', 'Paused'], ['archived', 'Archived']].map(([st, label]) => (
+                          <option value={st} selected={d.status === st}>{label}</option>
                         ))}
                       </select>
-                      <button class="btn btn-outline btn-sm" type="submit">Set</button>
+                      <button class="btn btn-outline btn-sm" type="submit">Save</button>
                     </form>
                   </td>
-                  <td>{d.ends_at ? new Date(d.ends_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'no end date'}</td>
+                  <td>
+                    {d.ends_at ? formatDate(d.ends_at) : 'no end date'}
+                    {hasEnded(d) && (
+                      <span class="pill pill-archived ended">ended — not on the site</span>
+                    )}
+                  </td>
                   <td><a href={`/admin/deals/${d.id}`}>Edit fully</a></td>
                 </tr>
               ))}
@@ -521,9 +588,14 @@ const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').le
                    pattern="[A-Za-z0-9._-]{2,24}" placeholder="Optional" />
           </div>
           <div class="field">
-            <label for="deal_ends_at">Ends</label>
+            <label for="deal_ends_at">Ends (Ohio time)</label>
             <input class="input" id="deal_ends_at" name="deal_ends_at" type="datetime-local" />
-            <p class="hint">Leave blank to run until you stop it.</p>
+            <p class="hint">Leave blank to run until you stop it. It comes off the site by itself at this time.</p>
+          </div>
+          <div class="field">
+            <label for="deal_restrictions">Key limits <span class="opt">(optional, shown on cards)</span></label>
+            <input class="input" id="deal_restrictions" name="deal_restrictions" maxlength="120"
+                   placeholder="Dine-in only · One per visit" />
           </div>
           <div class="field">
             <label for="deal_status">Status</label>

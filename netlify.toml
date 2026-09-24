@@ -20,7 +20,7 @@
     # needs no 'unsafe-inline' and no per-script hashes. Astro's scoped styles
     # are emitted inline, which is why style-src alone carries 'unsafe-inline'
     # — inline CSS cannot execute, so the risk is not comparable.
-    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 
 [[headers]]
   for = "/_astro/*"

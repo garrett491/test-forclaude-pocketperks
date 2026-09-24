@@ -1,62 +1,47 @@
 ---
 import type { Deal } from '../lib/types';
-import {
-  imageUrl, imageSrcSet, imageDimensions, expiryLabel, isEndingSoon, isNew,
-  initials, truncate,
-} from '../lib/format';
+import MediaFrame from './MediaFrame.astro';
+import { expiryLabel, isEndingSoon, isNew, truncate } from '../lib/format';
 
-interface Props { deal: Deal; priority?: boolean; showMerchant?: boolean; }
-const { deal, priority = false, showMerchant = true } = Astro.props;
+/**
+ * One deal, for lists of a single business's offers (its own page, and
+ * "more from this business" on a deal page). Everywhere businesses are
+ * listed side by side, BusinessCard is used instead.
+ */
+interface Props { deal: Deal; priority?: boolean; showMerchant?: boolean; headingLevel?: 'h2' | 'h3'; }
+const { deal, priority = false, showMerchant = true, headingLevel = 'h3' } = Astro.props;
+const Heading = headingLevel;
 
 const merchant = deal.merchant!;
 const href = `/b/${merchant.slug}/${deal.slug}`;
 const expiry = expiryLabel(deal);
-const cardWidth = 380;
 
 /**
- * A logo standing in for a missing photo must not be cropped to fill a 16:10
- * frame — that is what was slicing the tops and sides off wordmarks. When we
- * fall back to the logo we contain it on white instead.
+ * The deal's own image, then the business photo, then the logo. A logo
+ * stands on white with padding; a photo on a quiet neutral. Either way the
+ * whole image shows — a flyer's prices and dates are never cut off.
  */
 const art = deal.image ?? merchant.cover ?? merchant.logo;
 const artIsLogo = !deal.image && !merchant.cover && !!merchant.logo;
-const dims = imageDimensions(art, cardWidth);
 
-/**
- * Badge precedence, decided once here rather than per template.
- * A card shows at most one badge: two badges compete and neither is read.
- */
+/** At most one badge: two badges compete and neither is read. */
 const badge = deal.badge
   ? { label: deal.badge.label, style: deal.badge.style_key }
   : isEndingSoon(deal)
-    ? { label: expiry ?? 'Ending soon', style: 'outline' as const }
+    ? null
     : isNew(deal)
       ? { label: 'New', style: 'lime' as const }
       : null;
 ---
 
-<article
-  class="deal-card card"
-  data-deal-id={deal.id}
-  data-merchant-id={merchant.id}
-  data-track-impression
->
-  <div class={`art ${artIsLogo ? 'is-logo' : ''}`}>
-    {art ? (
-      <img
-        src={imageUrl(art, cardWidth)}
-        srcset={imageSrcSet(art, cardWidth)}
-        sizes="(min-width: 60rem) 360px, (min-width: 30rem) 45vw, 92vw"
-        alt={art.alt_text || `${merchant.name}`}
-        width={dims.width}
-        height={dims.height}
-        loading={priority ? 'eager' : 'lazy'}
-        fetchpriority={priority ? 'high' : 'auto'}
-        decoding="async"
-      />
-    ) : (
-      <div class="art-fallback" aria-hidden="true"><span>{initials(merchant.name)}</span></div>
-    )}
+<article class="deal-card card" data-deal-id={deal.id} data-merchant-id={merchant.id} data-track-impression>
+  <div class="art">
+    <MediaFrame
+      asset={art} mode="box" ratio={16 / 10} kind={artIsLogo ? 'logo' : 'photo'}
+      alt={deal.image ? (deal.image.alt_text || deal.headline) : ''}
+      name={merchant.name} width={640} priority={priority}
+      sizes="(min-width: 75rem) 360px, (min-width: 48rem) 45vw, 94vw"
+    />
     {badge && <span class={`badge badge-${badge.style} art-badge`}>{badge.label}</span>}
   </div>
 
@@ -69,15 +54,12 @@ const badge = deal.badge
       </p>
     )}
 
-    <h3 class="headline">
-      {/* The whole card is not a link. One link, one destination, so
-          keyboard and screen-reader users get a single unambiguous target
-          — the old cards nested phone, website and favourite buttons inside
-          a clickable div. */}
+    <Heading class="headline">
       <a href={href} class="stretch">{deal.headline}</a>
-    </h3>
+    </Heading>
 
     {deal.description && <p class="desc">{truncate(deal.description, 110)}</p>}
+    {deal.restrictions && <p class="limits">{deal.restrictions}</p>}
 
     {deal.coupon_code && (
       <div class="stitch-panel code-panel">
@@ -86,46 +68,23 @@ const badge = deal.badge
       </div>
     )}
 
-    {/* One card per business in the feed, so the rest of their offers are
-        one tap away rather than three more cards to scroll past. Loud,
-        because a business's other offers are the thing most easily missed. */}
-    {(deal.sibling_count ?? 0) > 0 && (
-      <a class="more-band" href={`/b/${merchant.slug}`}>
-        <span class="mb-text">
-          See {deal.sibling_count} more {deal.sibling_count === 1 ? 'deal' : 'deals'} from {merchant.name}
-        </span>
-        <span class="mb-arrow" aria-hidden="true">→</span>
-      </a>
-    )}
-
     <div class="meta">
-      {expiry && <span class="expiry">{expiry}</span>}
-      <span class="see">See deal</span>
+      {expiry && <span class:list={['expiry', { 'is-soon': isEndingSoon(deal) }]}>{expiry}</span>}
+      <span class="see" aria-hidden="true">See deal →</span>
     </div>
   </div>
 </article>
 
 <style>
   .deal-card { position: relative; }
-
-  .art { position: relative; aspect-ratio: 16 / 10; background: var(--pp-deep-050); }
-  .art img { width: 100%; height: 100%; object-fit: cover; }
-  .art.is-logo { background: var(--pp-white); }
-  .art.is-logo img { object-fit: contain; padding: var(--pp-space-5); }
-  .art-fallback {
-    width: 100%; height: 100%;
-    display: grid; place-items: center;
-    background: var(--pp-deep); color: var(--pp-lime-300);
-    font-family: var(--pp-font-display); font-size: 2.25rem;
-  }
-  .art-badge { position: absolute; top: var(--pp-space-3); left: var(--pp-space-3); }
+  .art { position: relative; }
+  .art-badge { position: absolute; top: var(--pp-space-3); left: var(--pp-space-3); z-index: 2; }
 
   .body {
     padding: var(--pp-space-4);
     display: flex; flex-direction: column; gap: var(--pp-space-2);
     flex: 1;
   }
-
   .merchant-line {
     display: flex; align-items: center; gap: var(--pp-space-2);
     margin: 0; font-size: var(--pp-text-xs); color: var(--pp-muted);
@@ -137,36 +96,23 @@ const badge = deal.badge
   .headline a { color: var(--pp-text); text-decoration: none; }
   .headline a:hover { color: var(--pp-green); text-decoration: underline; }
 
-  /* One target covering the card: a large, forgiving hit area (Fitts's Law)
-     without nesting interactive elements inside each other. */
-  .stretch::after {
-    content: ''; position: absolute; inset: 0; z-index: 1;
-  }
-
   .desc { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
+  .limits { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: 0; font-weight: 600; }
 
-  .code-panel {
-    display: flex; align-items: baseline; gap: var(--pp-space-2);
-    margin: var(--pp-space-1) 0 0;
-  }
+  .code-panel { display: flex; align-items: baseline; gap: var(--pp-space-2); margin: var(--pp-space-1) 0 0; }
   .code-label {
     font-size: var(--pp-text-xs); text-transform: uppercase;
     letter-spacing: 0.06em; color: var(--pp-muted); font-weight: 600;
   }
-  .code-value {
-    font-family: var(--pp-font-display); font-size: var(--pp-text-lg);
-    color: var(--pp-green); font-weight: 700;
-  }
+  .code-value { font-family: var(--pp-font-display); font-size: var(--pp-text-lg); color: var(--pp-green); font-weight: 700; }
 
   .meta {
     margin-top: auto; padding-top: var(--pp-space-2);
     display: flex; align-items: center; justify-content: space-between;
-    gap: var(--pp-space-3);
-    font-size: var(--pp-text-xs);
+    gap: var(--pp-space-3); font-size: var(--pp-text-xs);
   }
   .expiry { color: var(--pp-muted); font-weight: 600; }
-  .see {
-    color: var(--pp-green); font-weight: 700; margin-left: auto;
-  }
+  .expiry.is-soon { color: var(--pp-text); }
+  .see { color: var(--pp-green); font-weight: 700; margin-left: auto; }
   .deal-card:hover .see { text-decoration: underline; }
 </style>

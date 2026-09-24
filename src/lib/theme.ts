@@ -72,6 +72,8 @@ export interface FontChoice {
   stack: string;
   /** Google Fonts family spec, or null for a system stack that loads nothing. */
   google: string | null;
+  /** Bundled with the site (see global.css), so no request to Google is made. */
+  selfHosted?: boolean;
   role: 'display' | 'body' | 'both';
 }
 
@@ -83,7 +85,7 @@ export interface FontChoice {
 export const FONTS: FontChoice[] = [
   { id: 'playfair', label: 'Playfair Display', family: 'Playfair Display',
     stack: "'Playfair Display', 'Iowan Old Style', Georgia, serif",
-    google: 'Playfair+Display:wght@700', role: 'display' },
+    google: 'Playfair+Display:wght@700', role: 'display', selfHosted: true },
   { id: 'fraunces', label: 'Fraunces', family: 'Fraunces',
     stack: "'Fraunces', Georgia, serif", google: 'Fraunces:opsz,wght@9..144,700', role: 'display' },
   { id: 'bitter', label: 'Bitter', family: 'Bitter',
@@ -96,7 +98,7 @@ export const FONTS: FontChoice[] = [
 
   { id: 'dm-sans', label: 'DM Sans', family: 'DM Sans',
     stack: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    google: 'DM+Sans:wght@400;600', role: 'body' },
+    google: 'DM+Sans:wght@400;600', role: 'body', selfHosted: true },
   { id: 'inter', label: 'Inter', family: 'Inter',
     stack: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     google: 'Inter:wght@400;600', role: 'body' },
@@ -226,7 +228,10 @@ export function resolveTheme(raw: unknown): Required<ThemeTokens> {
 
 /** The Google Fonts href for the chosen pair, or null when neither needs one. */
 export function fontHref(theme: Required<ThemeTokens>): string | null {
+  // The default pair ships with the site. Google is only contacted when the
+  // Design page has picked a different family.
   const families = [fontById(theme.font_display), fontById(theme.font_body)]
+    .filter((f) => f && !f.selfHosted)
     .map((f) => f?.google)
     .filter((g): g is string => !!g);
   const unique = [...new Set(families)];
@@ -256,8 +261,12 @@ export function themeCss(theme: Required<ThemeTokens>): string {
 
   set('--pp-bg', c('page_bg'));
   set('--pp-bg-raised', c('surface_bg'));
+  // Components read --pp-surface and --pp-muted directly. Without these two
+  // lines the "Card background" and "Secondary text" controls did nothing.
+  set('--pp-surface', c('surface_bg'));
   set('--pp-text', c('text'));
   set('--pp-text-muted', c('muted'));
+  set('--pp-muted', c('muted'));
   set('--pp-heading', c('heading'));
   set('--pp-link', c('link'));
   set('--pp-action-bg', c('button_bg'));

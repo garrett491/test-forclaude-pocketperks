@@ -1,5 +1,6 @@
 import { defineMiddleware } from 'astro:middleware';
 import { requireAdmin } from './lib/admin';
+import { purgePublicCache } from './lib/purge';
 
 /**
  * Every /admin route is gated here, before any page code runs.
@@ -16,7 +17,18 @@ import { requireAdmin } from './lib/admin';
 export const onRequest = defineMiddleware(async (context, next) => {
   const { pathname } = context.url;
 
-  if (!pathname.startsWith('/admin')) return next();
+  // Fresh for every request. See lib/memo.ts.
+  context.locals.memo = new Map();
+
+  const isAdminWrite = context.request.method === 'POST' &&
+    (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) &&
+    pathname !== '/admin/login' && pathname !== '/admin/logout';
+
+  if (!pathname.startsWith('/admin')) {
+    const response = await next();
+    if (isAdminWrite && response.status < 400) await purgePublicCache();
+    return response;
+  }
 
   // The login page and the sign-out handler must stay reachable.
   if (pathname === '/admin/login' || pathname === '/admin/logout') return next();
@@ -32,6 +44,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
   context.locals.profile = session.profile;
 
   const response = await next();
+
+  // Anything saved in the dashboard shows on the public site on the very
+  // next page view, not after the CDN's cache happens to expire.
+  if (isAdminWrite && response.status < 500) await purgePublicCache();
 
   // The admin area is never cached or indexed. Both matter: a CDN-cached
   // admin page could be served to the wrong person.

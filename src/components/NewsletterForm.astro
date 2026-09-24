@@ -28,7 +28,8 @@ const mode = (settings['newsletter.mode'] as string) ?? 'supabase';
 const externalUrl = settings['newsletter.external_form_url'] as string | undefined;
 const useExternal = mode === 'activecampaign_link' && !!externalUrl;
 
-const formId = `nl-${source}`;
+const formId = `nl-${source.replace(/[^a-z0-9-]/gi, '-')}`;
+const Wrapper = compact ? 'div' : 'section';
 
 /**
  * One email field. The old form also asked for a phone number, which is a
@@ -37,20 +38,24 @@ const formId = `nl-${source}`;
  */
 ---
 
-<section class={`newsletter ${compact ? 'is-compact' : ''}`} aria-labelledby={`${formId}-title`}>
+{/* The footer copy is not a landmark: the page body usually has its own
+    signup panel, and two identically named regions confuse screen-reader
+    navigation. */}
+<Wrapper class={`newsletter ${compact ? 'is-compact' : ''}`} aria-labelledby={compact ? undefined : `${formId}-title`}>
   <h2 id={`${formId}-title`} class="nl-title">{headline}</h2>
   <p class="nl-body">{body}</p>
 
   {useExternal ? (
-    <a href={externalUrl} class="btn btn-primary" rel="noopener">{ctaLabel}</a>
+    <a href={externalUrl} class="btn btn-primary" rel="noopener noreferrer">{ctaLabel}</a>
   ) : (
-    <form class="nl-form" data-newsletter data-source={source} novalidate>
+    <form class="nl-form" method="post" action="/api/subscribe" data-newsletter data-source={source} novalidate>
+      <input type="hidden" name="source" value={source} />
       <div class="field">
         <label class="sr-only" for={`${formId}-email`}>Email address</label>
         <input
           class="input" id={`${formId}-email`} name="email" type="email"
           inputmode="email" autocomplete="email" required
-          placeholder="you@example.com" aria-describedby={`${formId}-fine`}
+          placeholder="you@example.com" aria-describedby={`${formId}-fine ${formId}-status`}
         />
       </div>
 
@@ -63,10 +68,10 @@ const formId = `nl-${source}`;
       <button class="btn btn-primary" type="submit">{ctaLabel}</button>
 
       <p class="nl-fine" id={`${formId}-fine`}>{finePrint}</p>
-      <div class="nl-status" role="status" aria-live="polite"></div>
+      <div class="nl-status" id={`${formId}-status`} role="status" aria-live="polite"></div>
     </form>
   )}
-</section>
+</Wrapper>
 
 <style>
   .newsletter { display: flex; flex-direction: column; gap: var(--pp-space-2); }

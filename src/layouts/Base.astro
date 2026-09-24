@@ -2,7 +2,7 @@
 import '../styles/global.css';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
-import { getSiteChrome, getTowns } from '../lib/queries';
+import { getSiteChrome, getTownsSafe } from '../lib/queries';
 import { resolveTheme, themeCss, fontHref } from '../lib/theme';
 import { getBranding } from '../lib/branding';
 import { resolveTownContext } from '../lib/location';
@@ -18,7 +18,7 @@ interface Props {
   /** JSON-LD objects. Only emit markup describing what is actually on the page. */
   schema?: Record<string, unknown>[];
   breadcrumbs?: { name: string; href: string }[];
-  /** Set by /[town] so the header agrees with the page being viewed. */
+  /** Set by town pages so the header agrees with the page being viewed. */
   pathTownSlug?: string;
 }
 
@@ -27,31 +27,33 @@ const {
   ogType = 'website', noindex = false, schema = [], breadcrumbs = [], pathTownSlug,
 } = Astro.props;
 
-const { settings, nav, blocks } = await getSiteChrome();
-const [branding, towns] = await Promise.all([getBranding(settings), getTowns()]);
+// Both are shared with the page through Astro.locals, so asking for them
+// here costs nothing extra. Neither throws: if the database is down the
+// header and footer still render from defaults.
+const [{ settings, nav, blocks }, towns] = await Promise.all([
+  getSiteChrome(Astro.locals),
+  getTownsSafe(Astro.locals),
+]);
+const branding = await getBranding(settings);
 
-// One rule for which town is being viewed, shared by the header, the
-// carousel, the directory and the search. Pages that filter by it must send
-// Vary: Cookie so the CDN does not serve one visitor's town to the next.
 const townContext = resolveTownContext(Astro.url, Astro.cookies, towns, pathTownSlug);
-if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
 
 // Colours, fonts and sizes chosen on the admin Design page. Emitted as a
-// style element, never a script, so the strict script-src policy is
-// untouched.
+// style element, never a script, so the strict script-src policy holds.
 const theme = resolveTheme(settings['theme.tokens']);
 const themeStyles = themeCss(theme);
 const googleFonts = fontHref(theme);
 
-const siteName = (settings['site.name'] as string) ?? 'Pocket Perks';
-const siteUrl = import.meta.env.PUBLIC_SITE_URL ?? Astro.site?.href.replace(/\/$/, '') ?? '';
-const canonical = `${siteUrl}${canonicalPath ?? Astro.url.pathname}`.replace(/\/$/, '') || siteUrl;
+const siteName = (settings['site.name'] as string) || 'Pocket Perks';
+const siteUrl = (import.meta.env.PUBLIC_SITE_URL ?? Astro.site?.href ?? '').replace(/\/$/, '');
+const canonical = `${siteUrl}${canonicalPath ?? Astro.url.pathname}`.replace(/(.)\/$/, '$1');
 
 const metaDescription =
   description ?? (settings['seo.default_description'] as string) ?? '';
-const shareImage =
-  ogImage ?? branding.ogImage ??
-  `${siteUrl}${(settings['seo.og_image_path'] as string) ?? '/og-default.png'}`;
+const absolute = (url: string) => (/^https?:\/\//.test(url) ? url : `${siteUrl}${url.startsWith('/') ? '' : '/'}${url}`);
+const shareImage = absolute(
+  ogImage ?? branding.ogImage ?? ((settings['seo.og_image_path'] as string) || '/og-default.png')
+);
 
 const fullTitle = title.includes(siteName) ? title : `${title} — ${siteName}`;
 
@@ -61,7 +63,7 @@ const organizationSchema = {
   name: siteName,
   url: siteUrl,
   logo: `${siteUrl}/logo.png`,
-  description: settings['seo.default_description'],
+  ...(settings['seo.default_description'] ? { description: settings['seo.default_description'] } : {}),
 };
 
 const breadcrumbSchema =
@@ -79,13 +81,21 @@ const breadcrumbSchema =
     : null;
 
 const allSchema = [organizationSchema, breadcrumbSchema, ...schema].filter(Boolean);
+
+/**
+ * JSON inside a script element must not contain "</script>", or any text a
+ * business typed into their description could close the element and run as
+ * code. Escaping "<" as < keeps the JSON identical and makes that
+ * impossible.
+ */
+const safeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
     <title>{fullTitle}</title>
     <meta name="description" content={metaDescription} />
@@ -98,19 +108,19 @@ const allSchema = [organizationSchema, breadcrumbSchema, ...schema].filter(Boole
     <meta property="og:description" content={metaDescription} />
     <meta property="og:url" content={canonical} />
     <meta property="og:image" content={shareImage} />
+    <meta property="og:locale" content="en_US" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={metaDescription} />
     <meta name="twitter:image" content={shareImage} />
 
     <meta name="theme-color" content="#093814" />
+    <meta name="format-detection" content="telephone=no" />
     <link rel="icon" href={branding.favicon} type={branding.faviconType} />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
-    {/*
-      Three weights, not the six the old page loaded. preconnect is present
-      because without it the browser cannot start the font handshake until
-      the CSS has already downloaded and parsed.
-    */}
+    {/* Only when the Design page has chosen a font other than the bundled
+        pair. The default look makes no request to Google at all. */}
     {googleFonts && (
       <>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -122,7 +132,7 @@ const allSchema = [organizationSchema, breadcrumbSchema, ...schema].filter(Boole
     {themeStyles && <style set:html={themeStyles} />}
 
     {allSchema.map((s) => (
-      <script is:inline type="application/ld+json" set:html={JSON.stringify(s)} />
+      <script is:inline type="application/ld+json" set:html={safeJson(s)} />
     ))}
   </head>
 
@@ -130,10 +140,10 @@ const allSchema = [organizationSchema, breadcrumbSchema, ...schema].filter(Boole
     <a class="skip-link" href="#main">Skip to content</a>
     <Header nav={nav} settings={settings} blocks={blocks} branding={branding}
             towns={towns} townContext={townContext} />
-    <main id="main">
+    <main id="main" tabindex="-1">
       <slot />
     </main>
     <Footer nav={nav} settings={settings} branding={branding} />
-    <script is:inline type="module" src="/js/site.js" defer></script>
+    <script is:inline type="module" src="/js/site.js"></script>
   </body>
 </html>

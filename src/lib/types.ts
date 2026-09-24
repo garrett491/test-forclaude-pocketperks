@@ -42,6 +42,14 @@ export interface MediaAsset {
   alt_text: string;
   width: number | null;
   height: number | null;
+  /** Smaller copies made at upload time. Empty for older uploads. */
+  variants?: MediaVariant[] | null;
+}
+
+export interface MediaVariant {
+  w: number;
+  h: number;
+  path: string;
 }
 
 export interface MerchantHours {
@@ -74,6 +82,8 @@ export interface Merchant {
   town_id: string;
   is_featured: boolean;
   display_priority: number;
+  /** Set in admin. Older databases without migration 0009 fall back to Premium. */
+  show_in_carousel?: boolean;
   seo_title: string | null;
   seo_description: string | null;
   created_at: string;
@@ -100,6 +110,9 @@ export interface Deal {
   headline: string;
   description: string | null;
   terms: string | null;
+  /** Short card-sized limits, e.g. "Dine-in only · One per visit". */
+  restrictions?: string | null;
+  merchant_id?: string;
   deal_type: DealType;
   coupon_code: string | null;
   starts_at: string | null;
@@ -110,8 +123,6 @@ export interface Deal {
   badge: Badge | null;
   image: MediaAsset | null;
   merchant?: Merchant | null;
-  /** How many other live deals the same business has. Set by listDealsByMerchant. */
-  sibling_count?: number;
 }
 
 export interface ContentBlock {

@@ -63,24 +63,64 @@ function initPrint() {
  * went in; and because the bytes come out of the canvas encoder, EXIF
  * (including GPS coordinates from a phone) and anything hidden inside the
  * original container are gone by construction.
+ *
+ * Only ever scaled down, never cropped: the whole image is kept.
  */
-async function shrinkImage(file, maxEdge) {
-  const bitmap = await createImageBitmap(file);
+async function encode(bitmap, maxEdge, quality) {
   const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
-  const width = Math.round(bitmap.width * scale);
-  const height = Math.round(bitmap.height * scale);
-
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('canvas unavailable');
   context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82));
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', quality));
   if (!blob) throw new Error('encode failed');
   return { blob, width, height };
+}
+
+/**
+ * Smaller copies for phones. Cards are roughly 360px wide, which is ~720
+ * real pixels on a typical phone screen and ~1100 on a sharp one, so those
+ * are the two sizes made. Each is only made when it is meaningfully smaller
+ * than the image being uploaded.
+ */
+const VARIANT_EDGES = [640, 1200];
+
+function sizeWarning(kind, width, height) {
+  const ratio = width / height;
+  const notes = [];
+  const shortEdge = Math.min(width, height);
+  if (kind === 'logo' ? Math.max(width, height) < 240 : width < 600) {
+    notes.push(`This image is small (${width} × ${height} pixels). It will show, but may look soft — a larger version would be sharper.`);
+  }
+  if (ratio > 4 || ratio < 0.25) {
+    notes.push(`This image is very ${ratio > 1 ? 'wide' : 'tall'}. It will be shown whole, with plain space around it on cards. A less extreme version will appear larger.`);
+  }
+  if (!notes.length && shortEdge < 1) notes.push('That image has no size.');
+  return notes.join(' ');
+}
+
+/** Rebuilds a preview frame around a local image, matching MediaFrame. */
+function fillPreview(container, url, width, height, kind) {
+  const frame = container.querySelector('.mf');
+  if (!frame) return;
+  frame.style.setProperty('--ar', (width / height).toFixed(4));
+  frame.style.setProperty('--nw', `${width}px`);
+  frame.style.setProperty('--nh', `${height}px`);
+  frame.classList.remove('is-empty', 'is-broken');
+  const fallback = frame.querySelector('.mf-fallback');
+  if (fallback) fallback.hidden = true;
+  frame.querySelectorAll('img').forEach((img) => img.remove());
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = '';
+  img.width = width;
+  img.height = height;
+  frame.prepend(img);
+  frame.classList.toggle('mf-logo', kind === 'logo');
 }
 
 function initUploads() {
@@ -88,20 +128,35 @@ function initUploads() {
     const fileInput = root.querySelector('[data-file]');
     const idInput = root.querySelector('[data-media-id]');
     const altInput = root.querySelector('[data-alt]');
-    const preview = root.querySelector('[data-preview]');
+    const previews = root.querySelector('[data-previews]');
+    const empty = root.querySelector('[data-preview-empty]');
+    const warning = root.querySelector('[data-warning]');
     const clearButton = root.querySelector('[data-clear]');
     const status = root.querySelector('.upload-status');
-    if (!fileInput || !idInput || !preview || !status) return;
+    if (!fileInput || !idInput || !status) return;
 
+    const kind = root.dataset.kind || 'photo';
     const maxEdge = parseInt(root.dataset.maxEdge || '1200', 10);
+    const form = root.closest('form');
     const say = (message, state) => { status.textContent = message; status.dataset.state = state; };
+    const warn = (text) => { if (warning) { warning.textContent = text; warning.hidden = !text; } };
+    let busy = false;
+
+    // Saving while an upload is still in flight would save the old image.
+    if (form) {
+      form.addEventListener('submit', (event) => {
+        if (busy) { event.preventDefault(); say('Wait for the image to finish uploading, then save.', 'error'); }
+      });
+    }
 
     if (clearButton) {
       clearButton.addEventListener('click', () => {
         idInput.value = '';
-        preview.innerHTML = '<span class="preview-empty">No image yet</span>';
+        if (previews) previews.hidden = true;
+        if (empty) empty.hidden = false;
         clearButton.hidden = true;
         fileInput.value = '';
+        warn('');
         say('Image removed. Save the form to apply it.', 'ok');
       });
     }
@@ -111,46 +166,61 @@ function initUploads() {
       if (!file) return;
 
       if (file.size > 25000000) {
-        say('That file is enormous. Pick something under 25 MB.', 'error');
+        say('That file is very large. Pick something under 25 MB.', 'error');
         fileInput.value = '';
         return;
       }
 
+      busy = true;
       say('Preparing image…', 'busy');
+      warn('');
 
       try {
-        const { blob, width, height } = await shrinkImage(file, maxEdge);
+        const bitmap = await createImageBitmap(file);
+        const main = await encode(bitmap, maxEdge, 0.82);
+        const variants = [];
+        for (const edge of VARIANT_EDGES) {
+          if (Math.max(main.width, main.height) > edge * 1.25) variants.push(await encode(bitmap, edge, 0.8));
+        }
+        bitmap.close();
+
+        // Show it straight away, from the file itself.
+        const localUrl = URL.createObjectURL(main.blob);
+        root.querySelectorAll('[data-preview-card], [data-preview-page]').forEach((container) =>
+          fillPreview(container, localUrl, main.width, main.height, kind));
+        if (previews) previews.hidden = false;
+        if (empty) empty.hidden = true;
+        warn(sizeWarning(kind, main.width, main.height));
 
         const body = new FormData();
-        body.append('file', blob, 'image.webp');
-        body.append('width', String(width));
-        body.append('height', String(height));
+        body.append('file', main.blob, 'image.webp');
+        body.append('width', String(main.width));
+        body.append('height', String(main.height));
+        variants.forEach((variant, index) => {
+          body.append(`variant_${index}`, variant.blob, `image-${variant.width}.webp`);
+          body.append(`variant_${index}_width`, String(variant.width));
+          body.append(`variant_${index}_height`, String(variant.height));
+        });
         body.append('alt_text', altInput ? altInput.value.trim() : '');
 
         say('Uploading…', 'busy');
         const response = await fetch('/api/admin/upload', { method: 'POST', body });
         const result = await response.json().catch(() => ({}));
 
-        if (!response.ok) {
+        if (!response.ok || !result.media) {
           say(result.message || 'That did not upload. Try again.', 'error');
           fileInput.value = '';
           return;
         }
 
         idInput.value = result.media.id;
-        preview.innerHTML = '';
-        const img = document.createElement('img');
-        img.src = result.preview_url;
-        img.alt = altInput ? altInput.value.trim() : '';
-        img.width = 240;
-        img.height = Math.round((height / width) * 240);
-        preview.appendChild(img);
         if (clearButton) clearButton.hidden = false;
-
-        say('Uploaded. Save the form to apply it.', 'ok');
+        say('Uploaded. Press Save to put it on the site.', 'ok');
       } catch {
-        say('That image could not be processed. Try a different file.', 'error');
+        say('That image could not be read. Try a JPEG or PNG.', 'error');
         fileInput.value = '';
+      } finally {
+        busy = false;
       }
     });
   });

@@ -1,34 +1,50 @@
 ---
 import Base from '../layouts/Base.astro';
-import MerchantCard from '../components/MerchantCard.astro';
+import BusinessCard from '../components/BusinessCard.astro';
 import EmptyState from '../components/EmptyState.astro';
 import Pagination from '../components/Pagination.astro';
-import LocationPicker from '../components/LocationPicker.astro';
-import { getSiteChrome } from '../lib/queries';
+import ServiceNotice from '../components/ServiceNotice.astro';
+import { getSiteChrome, listMerchants, getCategoriesWithCounts, getTowns, PAGE_SIZE } from '../lib/queries';
 import { resolveTownContext, townFilter, withTown } from '../lib/location';
-import { listMerchants, getCategoriesWithCounts, getTowns, PAGE_SIZE, CACHE_PUBLIC } from '../lib/queries';
+import { cachePublic, markUnavailable } from '../lib/http';
+import { logDataError } from '../lib/errors';
+import type { Merchant, Town, Category } from '../lib/types';
+import type { Page } from '../lib/listing';
 
-Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
-
+/** The directory: every business, with its live deals on its card. */
 const params = Astro.url.searchParams;
-const categorySlug = params.get('category') ?? undefined;
-// townSlug resolved below from URL, cookie and default together.
-const query = params.get('q') ?? undefined;
+const categorySlug = params.get('category') || undefined;
+const query = params.get('q')?.trim() || undefined;
 const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
 
-const towns = await getTowns();
-const townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
-const townSlug = townFilter(townContext);
-if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
+const { blocks } = await getSiteChrome(Astro.locals);
 
-const [categories, results, { blocks }] = await Promise.all([
-  getCategoriesWithCounts(townSlug),
-  listMerchants({ categorySlug, townSlug, query, page, pageSize: PAGE_SIZE }),
-  getSiteChrome(),
-]);
+let towns: Town[] = [];
+let categories: Array<Category & { deal_count: number; merchant_count: number }> = [];
+let results: Page<Merchant> = { items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pageCount: 1 };
+let townContext = resolveTownContext(Astro.url, Astro.cookies, []);
+let unavailable = false;
+
+try {
+  towns = await getTowns(Astro.locals);
+  townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
+  const townSlug = townFilter(townContext);
+  [categories, results] = await Promise.all([
+    getCategoriesWithCounts(townSlug),
+    listMerchants({ categorySlug, townSlug, query, page, pageSize: PAGE_SIZE }),
+  ]);
+} catch (error) {
+  logDataError('businesses page', error);
+  unavailable = true;
+}
+
+if (unavailable) markUnavailable(Astro);
+else cachePublic(Astro, { varyByTown: towns.length > 1 });
 
 const activeCategory = categories.find((c) => c.slug === categorySlug);
+const usableCategories = categories.filter((c) => c.merchant_count > 0 || c.slug === categorySlug);
 const title = activeCategory ? `${activeCategory.name} Businesses` : 'Local Businesses';
+const showTown = townContext.showingAll;
 
 const buildUrl = (patch: Record<string, string | null>) => {
   const url = new URL(Astro.url);
@@ -41,15 +57,16 @@ const buildUrl = (patch: Record<string, string | null>) => {
 ---
 
 <Base
-  title={title}
+  title={unavailable ? 'Temporarily unavailable' : title}
   description={`Every business on Pocket Perks${activeCategory ? ` in ${activeCategory.name.toLowerCase()}` : ''}. Hours, phone numbers, directions and current offers.`}
   canonicalPath={categorySlug ? `/businesses?category=${categorySlug}` : '/businesses'}
-  noindex={!!query || page > 1}
+  noindex={!!query || page > 1 || unavailable}
   breadcrumbs={[
     { name: 'Home', href: '/' },
     { name: 'Businesses', href: '/businesses' },
   ]}
 >
+  {unavailable ? <ServiceNotice /> : (
   <div class="wrap section">
     <header class="page-head">
       <h1>{title}</h1>
@@ -89,28 +106,25 @@ const buildUrl = (patch: Record<string, string | null>) => {
       <label class="sr-only" for="biz-q">Search businesses</label>
       <input class="input" id="biz-q" name="q" type="search" value={query ?? ''}
              placeholder="Name, town, phone, category…" autocomplete="off"
-             data-server-search data-target="#biz-results" />
+             data-server-search data-target="#biz-results" enterkeyhint="search" />
+      {params.get('town') && <input type="hidden" name="town" value={params.get('town')} />}
       <button class="btn btn-primary" type="submit">Search</button>
     </form>
 
-    <div class="chip-row" role="list" aria-label="Filter by category" data-hide-on-search>
-      <a class="chip" role="listitem" href={buildUrl({ category: null })}
+    <div class="chip-row" role="group" aria-label="Filter by category" data-hide-on-search>
+      <a class="chip" href={buildUrl({ category: null })}
          aria-current={!categorySlug ? 'true' : undefined}>All</a>
-      {categories.map((c) => (
-        <a class="chip" role="listitem" href={buildUrl({ category: c.slug })}
+      {usableCategories.map((c) => (
+        <a class="chip" href={buildUrl({ category: c.slug })}
            aria-current={categorySlug === c.slug ? 'true' : undefined}>{c.name}</a>
       ))}
-      {/* Town appears only once there is more than one to choose between. */}
-      {towns.length > 1 && towns.map((t) => (
-        <a class="chip" role="listitem" href={buildUrl({ town: townSlug === t.slug ? null : t.slug })}
-           aria-current={townSlug === t.slug ? 'true' : undefined}>{t.name}</a>
-      ))}
+
     </div>
 
     {results.items.length > 0 ? (
       <>
         <div class="grid biz-grid" id="biz-results">
-          {results.items.map((m, i) => <MerchantCard merchant={m} priority={i < 4} />)}
+          {results.items.map((m, i) => <BusinessCard merchant={m} headingLevel="h2" priority={i < 2} showTown={showTown} />)}
         </div>
 
         <Pagination page={results.page} pageCount={results.pageCount} baseUrl={Astro.url} />
@@ -136,6 +150,7 @@ const buildUrl = (patch: Record<string, string | null>) => {
       )
     )}
   </div>
+  )}
 </Base>
 
 <style>

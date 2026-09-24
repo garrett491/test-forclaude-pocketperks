@@ -1,6 +1,6 @@
 ---
 import Admin from '../../../layouts/Admin.astro';
-import { str, bool, int, timestamp, toLocalInput, humanError } from '../../../lib/admin';
+import { str, bool, int, timestamp, toLocalInput, writeFailure } from '../../../lib/admin';
 import ImageUpload from '../../../components/ImageUpload.astro';
 
 export const prerender = false;
@@ -11,11 +11,16 @@ const isNew = id === 'new';
 
 let error: string | null = null;
 let success: string | null = null;
+/** What was typed, kept when a save fails so nothing has to be re-entered. */
+let submitted: FormData | null = null;
 
-const [{ data: merchants }, { data: badges }] = await Promise.all([
+const [{ data: merchants }, { data: badges }, restrictionsProbe] = await Promise.all([
   db.from('merchants').select('id, name, tier, status').neq('status', 'archived').order('name'),
   db.from('badges').select('id, label').eq('is_active', true).order('label'),
+  db.from('deals').select('restrictions').limit(1),
 ]);
+/** False until migration 0009 has been run; the field is hidden until then. */
+const restrictionsSupported = !restrictionsProbe.error;
 
 const dealTypes = [
   { key: 'percent_off', label: 'Percent off' },
@@ -50,22 +55,22 @@ if (Astro.request.method === 'POST') {
       copy.ends_at = null;
       copy.is_featured = false;
 
-      const { data: created, error: copyError } = await db
-        .from('deals').insert(copy).select('id').maybeSingle();
-      if (copyError) error = humanError(copyError);
-      else return Astro.redirect(
+      const inserted = await db.from('deals').insert(copy).select('id').maybeSingle();
+      const created = inserted.data as { id: string } | null;
+      error = writeFailure(inserted);
+      if (!error) return Astro.redirect(
         `/admin/deals/${created?.id}?saved=${encodeURIComponent('Copied. Set the dates and publish when you are ready.')}`, 302
       );
     } else {
       error = 'That deal no longer exists.';
     }
   } else if (intent === 'archive' && !isNew) {
-    const { error: archiveError } = await db.from('deals').update({ status: 'archived' }).eq('id', id);
-    if (archiveError) error = humanError(archiveError);
-    else return Astro.redirect(
+    error = writeFailure(await db.from('deals').update({ status: 'archived' }).eq('id', id).select('id'));
+    if (!error) return Astro.redirect(
       `/admin/deals?saved=${encodeURIComponent('Deal archived and removed from the site.')}`, 302
     );
   } else {
+    submitted = form;
     const merchantId = str(form, 'merchant_id');
     const headline = str(form, 'headline');
 
@@ -80,6 +85,7 @@ if (Astro.request.method === 'POST') {
         terms: str(form, 'terms'),
         deal_type: String(form.get('deal_type') ?? 'special'),
         coupon_code: str(form, 'coupon_code'),
+        ...(restrictionsSupported ? { restrictions: str(form, 'restrictions') } : {}),
         badge_id: str(form, 'badge_id'),
         starts_at: timestamp(form, 'starts_at'),
         ends_at: timestamp(form, 'ends_at'),
@@ -91,23 +97,28 @@ if (Astro.request.method === 'POST') {
 
       const imageId = str(form, 'image_media_id');
       const imageAlt = str(form, 'image_media_id_alt');
-      if (imageId) await db.from('media').update({ alt_text: imageAlt ?? '' }).eq('id', imageId);
+      if (imageId) error = writeFailure(await db.from('media').update({ alt_text: imageAlt ?? '' }).eq('id', imageId).select('id'), false);
 
-      const result = isNew
+      if (payload.starts_at && payload.ends_at && new Date(payload.ends_at) <= new Date(payload.starts_at)) {
+        error = 'The end date has to be after the start date.';
+      }
+      if (!['draft', 'active', 'paused'].includes(payload.status)) payload.status = 'draft';
+
+      const result = error ? null : isNew
         ? await db.from('deals').insert(payload).select('id').maybeSingle()
         : await db.from('deals').update(payload).eq('id', id).select('id').maybeSingle();
 
-      if (result.error) {
-        // The tier-limit trigger raises a message written for a human —
-        // "X is on the standard plan, which includes 2 active deal(s)."
-        // humanError passes those straight through.
-        error = humanError(result.error);
+      // The tier-limit trigger raises a message written for a human —
+      // "X is on the standard plan, which includes 2 active deal(s)."
+      if (result) error = writeFailure(result);
+      if (!result || error) {
+        // error already set
       } else if (isNew) {
         return Astro.redirect(
-          `/admin/deals/${result.data?.id}?saved=${encodeURIComponent('Deal created.')}`, 302
+          `/admin/deals/${(result.data as { id: string }).id}?saved=${encodeURIComponent('Deal created.')}`, 302
         );
       } else {
-        success = 'Saved.';
+        success = 'Saved. The public site shows the change straight away.';
       }
     }
   }
@@ -126,8 +137,23 @@ if (!isNew) {
 const flash = Astro.url.searchParams.get('saved');
 if (flash && !success) success = decodeURIComponent(flash);
 
+if (!error) submitted = null;
+
 const preselect = Astro.url.searchParams.get('merchant');
-const value = <T,>(key: string, fallback: T | string = ''): T | string => deal?.[key] ?? fallback;
+const value = <T,>(key: string, fallback: T | string = ''): T | string =>
+  submitted ? String(submitted.get(key) ?? fallback) : (deal?.[key] ?? fallback);
+const checked = (key: string): boolean => (submitted ? submitted.get(key) === 'on' : !!deal?.[key]);
+/** Date fields: the typed text after a failed save, else the stored time in Ohio time. */
+const dateValue = (key: string) => (submitted ? String(submitted.get(key) ?? '') : toLocalInput(deal?.[key]));
+let imageShown = deal?.image ?? null;
+if (submitted) {
+  const id = String(submitted.get('image_media_id') ?? '');
+  if (!id) imageShown = null;
+  else if (imageShown?.id !== id) {
+    const { data } = await db.from('media').select('id, bucket_id, storage_path, alt_text, width, height').eq('id', id).maybeSingle();
+    imageShown = data ?? null;
+  }
+}
 
 /** What the public would actually see right now, given status and schedule. */
 function liveState(): { label: string; tone: 'ok' | 'warn' | 'off' } | null {
@@ -135,16 +161,15 @@ function liveState(): { label: string; tone: 'ok' | 'warn' | 'off' } | null {
   if (deal.status !== 'active') return { label: `Not showing — status is ${deal.status}`, tone: 'off' };
   const now = Date.now();
   if (deal.starts_at && new Date(deal.starts_at).getTime() > now)
-    return { label: `Scheduled — starts ${new Date(deal.starts_at).toLocaleString('en-US')}`, tone: 'warn' };
+    return { label: `Scheduled — starts ${new Date(deal.starts_at).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' })}`, tone: 'warn' };
   if (deal.ends_at && new Date(deal.ends_at).getTime() <= now)
     return { label: 'Expired — the end date has passed, so it is off the site', tone: 'warn' };
   return { label: 'Showing on the site now', tone: 'ok' };
 }
 const state = liveState();
 
-const selectedMerchant = (merchants ?? []).find(
-  (m: any) => m.id === (deal?.merchant_id ?? preselect)
-) as any;
+const selectedMerchantId = submitted ? String(submitted.get('merchant_id') ?? '') : (deal?.merchant_id ?? preselect);
+const selectedMerchant = (merchants ?? []).find((m: any) => m.id === selectedMerchantId) as any;
 const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
 ---
 
@@ -181,7 +206,7 @@ const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
           <select class="input" id="merchant_id" name="merchant_id" required>
             <option value="">Choose one</option>
             {(merchants ?? []).map((m: any) => (
-              <option value={m.id} selected={(deal?.merchant_id ?? preselect) === m.id}>
+              <option value={m.id} selected={selectedMerchantId === m.id}>
                 {m.name} ({m.tier}{m.status !== 'active' ? `, ${m.status}` : ''})
               </option>
             ))}
@@ -216,6 +241,18 @@ const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
           <p class="hint">Optional. Letters, numbers, dots and dashes only.</p>
         </div>
 
+        {restrictionsSupported && (
+          <div class="field span-2">
+            <label for="restrictions">Key limits, shown on cards</label>
+            <input class="input" id="restrictions" name="restrictions" maxlength="120"
+                   value={value('restrictions')} placeholder="Dine-in only · Min. $20 · One per visit" />
+            <p class="hint">
+              The few limits a customer must know before they go — minimum spend, which location,
+              one per visit. Only what the business actually requires; full wording goes in Terms.
+            </p>
+          </div>
+        )}
+
         <div class="field span-2">
           <label for="terms">Terms and conditions</label>
           <textarea class="input" id="terms" name="terms" maxlength="1000"
@@ -228,12 +265,15 @@ const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
     <fieldset class="group">
       <legend>Deal image</legend>
       <p class="hint image-hint">
-        Optional. Without one the card falls back to the business's cover photo,
-        then their logo, then their initials — so a deal never looks broken.
+        Optional. Without one the deal uses the business's cover photo, then their
+        logo, then their initials — so a deal never looks broken. Flyers are fine:
+        the whole image always shows. But type the offer's key details into the
+        fields above too, because text inside a picture can't be read by
+        everyone or found by search.
       </p>
       <ImageUpload
         name="image_media_id" label="Image" aspect="wide" maxEdge={1400}
-        current={deal?.image ?? null}
+        current={imageShown}
         hint="A photo of the actual thing on offer beats a stock image."
       />
     </fieldset>
@@ -242,15 +282,15 @@ const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
       <legend>When it runs</legend>
       <div class="form-grid cols-2">
         <div class="field">
-          <label for="starts_at">Starts</label>
+          <label for="starts_at">Starts (Ohio time)</label>
           <input class="input" id="starts_at" name="starts_at" type="datetime-local"
-                 value={toLocalInput(deal?.starts_at)} />
+                 value={dateValue('starts_at')} />
           <p class="hint">Leave blank to start as soon as it goes live.</p>
         </div>
         <div class="field">
-          <label for="ends_at">Ends</label>
+          <label for="ends_at">Ends (Ohio time)</label>
           <input class="input" id="ends_at" name="ends_at" type="datetime-local"
-                 value={toLocalInput(deal?.ends_at)} />
+                 value={dateValue('ends_at')} />
           <p class="hint">
             Leave blank to run until you stop it. If you set a date, the deal
             comes off the site by itself — you do not have to remember.
@@ -277,24 +317,25 @@ const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
           <select class="input" id="badge_id" name="badge_id">
             <option value="">None — pick one automatically</option>
             {(badges ?? []).map((b: any) => (
-              <option value={b.id} selected={deal?.badge_id === b.id}>{b.label}</option>
+              <option value={b.id} selected={value('badge_id') === b.id}>{b.label}</option>
             ))}
           </select>
           <p class="hint">Leave on automatic and the site shows New or Ending soon when they apply.</p>
         </div>
 
         <div class="field">
-          <label for="display_priority">Sort priority</label>
-          <input class="input" id="display_priority" name="display_priority" type="number"
-                 value={value('display_priority', 0)} />
+          <label for="display_priority">Order on the business card</label>
+          <input class="input" id="display_priority" name="display_priority" type="number" step="1"
+                 value={value('display_priority', 0)} aria-describedby="deal-priority-hint" />
+          <p class="hint" id="deal-priority-hint">Cards show a business’s top three deals. Higher numbers come first; featured deals always lead.</p>
         </div>
 
         <div class="field">
           <label class="switch">
-            <input type="checkbox" name="is_featured" checked={value('is_featured', false)} />
+            <input type="checkbox" name="is_featured" checked={checked('is_featured')} />
             <span>Featured</span>
           </label>
-          <p class="hint">Puts it in the homepage featured row. A Premium benefit.</p>
+          <p class="hint">Puts this deal first on the business’s card and page.</p>
         </div>
       </div>
     </fieldset>

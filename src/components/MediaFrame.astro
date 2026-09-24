@@ -1,0 +1,78 @@
+---
+import type { MediaAsset } from '../lib/types';
+import { imageUrl, imageSrcSet, aspectRatio, initials } from '../lib/format';
+
+/**
+ * Every business image on the site goes through this component, and it has
+ * one rule: the whole image is always visible.
+ *
+ * Nothing is ever cropped to fill a box. Business uploads arrive in every
+ * shape — wide wordmarks, tall flyers, square logos, portrait phone photos —
+ * and cropping any of them cuts off letters, prices, dates or faces. The
+ * image is contained inside a frame instead, and the frame takes the space:
+ *
+ *   box   A fixed shape (cards, carousel), so a row of cards stays aligned.
+ *         Any leftover space is a quiet neutral, never a stretched image.
+ *   fit   Shaped by the image itself, capped in height (business and deal
+ *         pages), so a tall flyer gets the room it needs without a wide
+ *         banner leaving a huge empty band.
+ *   tile  A logo tile: fixed height, width follows the logo's proportions
+ *         between a square and a wide lozenge.
+ *
+ * Images are never enlarged past their natural size, so a low-resolution
+ * upload stays sharp and small rather than blowing up into a blur. The frame
+ * reserves its size before the file arrives, so nothing jumps as it loads.
+ *
+ * If the file fails, site.js swaps in the business's initials on a plain
+ * tile. The fallback is visibly generic, so it never passes for their logo.
+ */
+interface Props {
+  asset: MediaAsset | null | undefined;
+  mode?: 'box' | 'fit' | 'tile';
+  kind?: 'photo' | 'logo';
+  /** Width over height for box mode. 16/10 by default. */
+  ratio?: number;
+  /** Alt text. Pass '' when the image only repeats text right beside it. */
+  alt: string;
+  /** Used for the initials fallback. */
+  name: string;
+  /** Roughly how wide it renders, in CSS pixels, to pick the right file. */
+  width?: number;
+  sizes?: string;
+  priority?: boolean;
+  class?: string;
+  /** Show the initials tile when there is no image at all. */
+  fallback?: boolean;
+}
+
+const {
+  asset, mode = 'box', kind = 'photo', ratio = 16 / 10, alt, name,
+  width = 640, sizes, priority = false, class: extra = '', fallback = true,
+} = Astro.props;
+
+if (!asset && !fallback) return;
+
+const ar = aspectRatio(asset) ?? (kind === 'logo' ? 1 : 16 / 9);
+const src = imageUrl(asset, width);
+const srcset = imageSrcSet(asset);
+const dims = asset?.width && asset?.height ? `;--nw:${asset.width}px;--nh:${asset.height}px` : '';
+const style = `--ar:${ar.toFixed(4)};--box:${ratio.toFixed(4)}${dims}`;
+---
+
+<div class:list={['mf', `mf-${mode}`, `mf-${kind}`, extra, { 'is-empty': !asset }]} style={style}>
+  {asset && src && (
+    <img
+      src={src}
+      srcset={srcset ?? undefined}
+      sizes={srcset ? (sizes ?? `${width}px`) : undefined}
+      alt={alt}
+      width={asset.width ?? undefined}
+      height={asset.height ?? undefined}
+      loading={priority ? 'eager' : 'lazy'}
+      fetchpriority={priority ? 'high' : undefined}
+      decoding="async"
+      data-mf-img
+    />
+  )}
+  <span class="mf-fallback" aria-hidden="true" hidden={!!asset}>{initials(name) || '•'}</span>
+</div>

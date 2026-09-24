@@ -8,17 +8,30 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "qa": "node supabase/tests/browser-qa.mjs"
+    "test": "vitest run",
+    "test:db": "bash supabase/tests/run.sh",
+    "test:e2e": "bash tests/support/services.sh start preview && playwright test; status=$?; bash tests/support/services.sh stop; exit $status",
+    "images:brand": "node scripts/make-brand-images.mjs",
+    "images:fixtures": "node tests/support/make-images.mjs"
   },
   "dependencies": {
     "@astrojs/netlify": "^6.5.14",
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/playfair-display": "^5.3.0",
+    "@netlify/functions": "^5.3.0",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.58.0",
     "astro": "^5.14.1"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
-    "jsdom": "^27.0.0",
-    "typescript": "^5.9.3"
+    "@playwright/test": "^1.63.0",
+    "axe-core": "^4.13.0",
+    "pg": "^8.23.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=20.3"
   }
 }

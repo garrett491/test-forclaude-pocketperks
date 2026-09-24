@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createHash } from 'node:crypto';
 import { getAdminDb } from '../../lib/supabase';
+import { logDataError } from '../../lib/errors';
 
 export const prerender = false;
 
@@ -19,13 +20,22 @@ function ipHash(ip: string): string {
   return createHash('sha256').update(`${salt}|${ip}`).digest('hex').slice(0, 32);
 }
 
-const json = (status: number, message: string) =>
-  new Response(JSON.stringify({ message }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+/** JSON for the script-driven form; a plain form post is sent back to the page. */
+const replier = (asPage: boolean) => (status: number, message: string) =>
+  asPage
+    ? new Response(null, {
+        status: 303,
+        headers: { Location: `/for-business?enquiry=${status < 300 ? 'ok' : status === 429 ? 'limited' : status === 400 ? 'invalid' : 'error'}#enquiry` },
+      })
+    : new Response(JSON.stringify({ message }), {
+        status,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+
+export const GET: APIRoute = () => new Response(null, { status: 405, headers: { Allow: 'POST' } });
 
 export const POST: APIRoute = async ({ request }) => {
+  const json = replier(!request.headers.get('content-type')?.includes('application/json'));
   let body: any;
   try {
     body = request.headers.get('content-type')?.includes('application/json')
@@ -91,7 +101,7 @@ export const POST: APIRoute = async ({ request }) => {
 
     return json(200, 'Got it. We will be in touch within a day or two.');
   } catch (err) {
-    console.error('lead error', err instanceof Error ? err.message : 'unknown');
+    logDataError('lead', err);
     return json(500, 'That did not send. Try again, or email us directly.');
   }
 };

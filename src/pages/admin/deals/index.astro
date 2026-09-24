@@ -1,5 +1,6 @@
 ---
 import Admin from '../../../layouts/Admin.astro';
+import { formatDate } from '../../../lib/format';
 
 export const prerender = false;
 
@@ -46,8 +47,7 @@ function liveState(deal: any): { label: string; cls: string } {
   return { label: 'live', cls: 'active' };
 }
 
-const fmt = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+const fmt = (iso: string | null) => (iso ? formatDate(iso) : '—');
 ---
 
 <Admin title="Deals" profile={profile}>
@@ -69,9 +69,9 @@ const fmt = (iso: string | null) =>
     {(merchantFilter || status !== 'all') && <a class="btn btn-ghost btn-sm" href="/admin/deals">Clear</a>}
   </form>
 
-  <div class="chip-row" role="list" aria-label="Filter by status">
+  <div class="chip-row" role="group" aria-label="Filter by status">
     {statuses.map((s) => (
-      <a class="chip" role="listitem"
+      <a class="chip"
          href={`/admin/deals?status=${s.key}${merchantFilter ? `&merchant=${merchantFilter}` : ''}`}
          aria-current={status === s.key ? 'true' : undefined}>{s.label}</a>
     ))}

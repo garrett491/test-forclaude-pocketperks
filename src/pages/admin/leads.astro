@@ -1,6 +1,6 @@
 ---
 import Admin from '../../layouts/Admin.astro';
-import { str, humanError } from '../../lib/admin';
+import { str, writeFailure } from '../../lib/admin';
 
 export const prerender = false;
 
@@ -15,10 +15,9 @@ if (Astro.request.method === 'POST') {
   const notes = str(form, 'admin_notes');
 
   if (id && ['new', 'contacted', 'won', 'lost'].includes(status)) {
-    const { error: updateError } = await db
-      .from('merchant_leads').update({ status, admin_notes: notes }).eq('id', id);
-    if (updateError) error = humanError(updateError);
-    else success = 'Enquiry updated.';
+    error = writeFailure(await db
+      .from('merchant_leads').update({ status, admin_notes: notes }).eq('id', id).select('id'));
+    if (!error) success = 'Enquiry updated.';
   } else {
     error = 'That update was not valid.';
   }
@@ -54,9 +53,9 @@ const fmt = (iso: string) =>
   {success && <p class="form-success" role="status">{success}</p>}
   {error && <p class="form-error" role="alert">{error}</p>}
 
-  <div class="chip-row" role="list" aria-label="Filter enquiries">
+  <div class="chip-row" role="group" aria-label="Filter enquiries">
     {filters.map((f) => (
-      <a class="chip" role="listitem" href={`/admin/leads?status=${f.key}`}
+      <a class="chip" href={`/admin/leads?status=${f.key}`}
          aria-current={filter === f.key ? 'true' : undefined}>{f.label}</a>
     ))}
   </div>

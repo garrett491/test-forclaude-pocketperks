@@ -4,10 +4,8 @@ import type { TownContext } from '../lib/location';
 
 interface Props {
   context: TownContext;
-  /** 'header' is the compact button; 'hero' is the large first-action bar. */
-  variant?: 'header' | 'hero';
 }
-const { context, variant = 'header' } = Astro.props;
+const { context } = Astro.props;
 const { towns, town, showingAll, isDefault } = context;
 
 /**
@@ -23,39 +21,18 @@ const { towns, town, showingAll, isDefault } = context;
  * block, and brings a focus trap and Escape handling with it. One code path
  * for desktop and mobile, and nothing above it can clip it.
  */
-const label = showingAll ? 'All towns' : town ? town.name : 'Pick your town';
-const needsChoice = isDefault && !showingAll;
+const label = showingAll ? 'All towns' : isDefault ? 'Pick your town' : town ? town.name : 'Pick your town';
 
-/**
- * The dialog is rendered once, by the header instance. The hero instance is
- * just another button that opens it. Two pickers on the homepage otherwise
- * meant two dialogs sharing an element id, which is invalid markup and
- * leaves a screen reader following aria-labelledby to whichever it met
- * first.
- */
-const ownsDialog = variant === 'header';
+/** Any [data-town-open] button on the page opens this one dialog. */
+const ownsDialog = true;
 ---
 
-{variant === 'hero' ? (
-  <div class="hero-location">
-    <span class="hl-eyebrow">Showing deals in</span>
-    <button class="hl-button" type="button" data-town-open>
-      <span class="pin" aria-hidden="true">📍</span>
-      <span class="hl-name">{label}</span>
-      <span class="hl-change">Change</span>
-    </button>
-    {needsChoice && (
-      <p class="hl-hint">Not your town? Tap to pick from {towns.length} nearby.</p>
-    )}
-  </div>
-) : (
-  <button class="picker-btn" type="button" data-town-open
-          aria-label={`Change location. Currently ${label}`}>
-    <span class="pin" aria-hidden="true">📍</span>
-    <span class="picker-label">{label}</span>
-    <span class="caret" aria-hidden="true">▾</span>
-  </button>
-)}
+<button class="picker-btn" type="button" data-town-open
+        aria-label={`Change town. Currently ${label}`}>
+  <span class="pin" aria-hidden="true">📍</span>
+  <span class="picker-label">{label}</span>
+  <span class="caret" aria-hidden="true">▾</span>
+</button>
 
 {ownsDialog && (
 <dialog class="town-dialog" data-town-dialog aria-labelledby="town-dialog-title">
@@ -64,20 +41,20 @@ const ownsDialog = variant === 'header';
       <h2 id="town-dialog-title">Choose your town</h2>
       <button class="td-close" type="button" data-town-close aria-label="Close">×</button>
     </div>
-    <p class="td-hint">We'll remember this and show you deals from here.</p>
+    <p class="td-hint">We’ll remember it on this device and show you deals from there.</p>
 
     <ul class="td-list list-plain">
       {towns.map((t: Town) => (
         <li>
           <a href={`/${t.slug}`} data-town-option data-town-slug={t.slug} data-town-name={t.name}
-             aria-current={!showingAll && town?.slug === t.slug ? 'true' : undefined}>
+             aria-current={!showingAll && !isDefault && town?.slug === t.slug ? 'true' : undefined}>
             <span class="td-name">{t.name}</span>
             <span class="td-state">{t.state_code}</span>
           </a>
         </li>
       ))}
       <li class="td-all">
-        <a href="/businesses?town=all" data-town-option data-town-slug="" data-town-name="All towns"
+        <a href="/?town=all" data-town-option data-town-slug="all" data-town-name="All towns"
            aria-current={showingAll ? 'true' : undefined}>
           <span class="td-name">Show every town</span>
         </a>
@@ -101,40 +78,6 @@ const ownsDialog = variant === 'header';
   .picker-btn:hover { background: color-mix(in srgb, var(--pp-action-bg) 88%, black); }
   .caret { font-size: 0.8em; opacity: 0.8; }
   .picker-label { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
-
-  /* ---- Hero bar: the first obvious action on the page ---- */
-  .hero-location {
-    display: flex; flex-direction: column; gap: var(--pp-space-2);
-    margin-bottom: var(--pp-space-4);
-  }
-  .hl-eyebrow {
-    font-size: var(--pp-text-xs); font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--pp-lime-300);
-  }
-  .hl-button {
-    display: inline-flex; align-items: center; gap: var(--pp-space-3);
-    align-self: flex-start; max-width: 100%;
-    min-height: 52px;
-    padding: var(--pp-space-2) var(--pp-space-3) var(--pp-space-2) var(--pp-space-4);
-    background: var(--pp-surface); color: var(--pp-text);
-    border: 0; border-left: var(--pp-stitch);
-    border-radius: var(--pp-radius-inset);
-    cursor: pointer; box-shadow: var(--pp-shadow-card);
-  }
-  .hl-button:hover { box-shadow: var(--pp-shadow-lift); }
-  .hl-name {
-    font-family: var(--pp-font-display); font-size: var(--pp-text-xl);
-    line-height: 1; color: var(--pp-heading);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .hl-change {
-    margin-left: auto; flex-shrink: 0;
-    font-size: var(--pp-text-xs); font-weight: 700;
-    color: var(--pp-action-text); background: var(--pp-action-bg);
-    padding: 0.4em 0.85em; border-radius: var(--pp-radius-chip);
-  }
-  .hl-hint { margin: 0; font-size: var(--pp-text-sm); color: rgba(255, 255, 255, 0.82); }
 
   /* ---- Dialog ---- */
   .town-dialog {
@@ -190,6 +133,5 @@ const ownsDialog = variant === 'header';
       padding-bottom: calc(var(--pp-space-6) + env(safe-area-inset-bottom, 0px));
     }
     .td-list a { min-height: 58px; font-size: var(--pp-text-lg); }
-    .hl-name { font-size: var(--pp-text-lg); }
   }
 </style>

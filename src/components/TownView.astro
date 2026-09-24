@@ -1,0 +1,217 @@
+---
+import type { Town, ContentBlock, SiteSettings } from '../lib/types';
+import type { TownPageData } from '../lib/queries';
+import Carousel from './Carousel.astro';
+import BusinessCard from './BusinessCard.astro';
+import EmptyState from './EmptyState.astro';
+import NewsletterForm from './NewsletterForm.astro';
+
+/**
+ * A town's front page: what is on offer here, best first.
+ *
+ * Used by the homepage once a town is chosen and by /<town> pages, so the
+ * two can never drift apart. `town` null means every town at once.
+ *
+ * Ordered by what a visitor came for. A short heading that says where they
+ * are and how to change it, search, the featured strip, then the deals —
+ * the first business card is reachable in one short scroll on a phone.
+ */
+interface Props {
+  town: Town | null;
+  towns: Town[];
+  data: TownPageData;
+  settings: SiteSettings;
+  blocks: Record<string, ContentBlock>;
+  /** The page's h1. */
+  heading: string;
+  subheading?: string;
+}
+const { town, towns, data, settings, blocks, heading, subheading } = Astro.props;
+
+const place = town ? town.name : 'every town';
+const townParam = town ? `town=${town.slug}` : 'town=all';
+const carouselSeconds = Number(settings['carousel.seconds_per_slide'] ?? 8) || 8;
+const carouselAutoplay = settings['carousel.autoplay'] !== false;
+const how = blocks['home.how_it_works']?.payload as { steps?: { title: string; body: string }[] } | undefined;
+const newsletter = blocks['home.newsletter']?.payload as Record<string, string> | undefined;
+
+const businessCount = data.cards.length + data.quiet.length;
+const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from ${businessCount} local ${businessCount === 1 ? 'business' : 'businesses'}`;
+---
+
+<section class="town-hero" data-remember-town={town ? '' : undefined} data-town-slug={town?.slug}>
+  <div class="wrap town-hero-inner">
+    <h1>{heading}</h1>
+    {subheading && <p class="town-sub">{subheading}</p>}
+
+    {towns.length > 1 && (
+      <p class="town-line">
+        <span class="town-now">
+          <span aria-hidden="true">📍</span>
+          {town ? <>Showing <strong>{town.name}, {town.state_code}</strong></> : <>Showing <strong>every town</strong></>}
+        </span>
+        <button class="town-change" type="button" data-town-open>Change town</button>
+      </p>
+    )}
+
+    <div class="hero-search-wrap">
+      <form class="hero-search" action="/deals" method="get" role="search">
+        <label class="sr-only" for="q">Search businesses and deals</label>
+        <input
+          class="input" id="q" name="q" type="search" enterkeyhint="search"
+          placeholder="Pizza, oil change, a business name…"
+          autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list"
+          aria-controls="hero-suggestions" data-suggest-search
+        />
+        <input type="hidden" name="town" value={town?.slug ?? 'all'} />
+        <button class="btn btn-primary" type="submit">Search</button>
+      </form>
+      <div class="suggest-panel" id="hero-suggestions" data-suggest-panel hidden></div>
+    </div>
+
+    {data.dealCount > 0 && <p class="town-stats">{stats}</p>}
+  </div>
+</section>
+
+<Carousel merchants={data.carousel} townName={town?.name ?? null}
+          seconds={carouselSeconds} autoplay={carouselAutoplay} />
+
+<div class="wrap section town-body">
+  {data.categories.length > 1 && (
+    <nav class="chip-row cat-row" aria-label="Browse by category">
+      {data.categories.map((c) => (
+        <a class="chip" href={`/deals?${townParam}&category=${c.slug}`}>
+          {c.name}<span class="chip-count" aria-label={`${c.deal_count} deals`}>{c.deal_count}</span>
+        </a>
+      ))}
+    </nav>
+  )}
+
+  <section aria-labelledby="deals-title" class="block">
+    <div class="section-head">
+      <h2 id="deals-title">Deals in {place}</h2>
+      {data.cards.length > 0 && <a href={`/deals?${townParam}`}>See all deals</a>}
+    </div>
+
+    {data.cards.length > 0 ? (
+      <div class="grid biz-grid">
+        {data.cards.map((m, i) => <BusinessCard merchant={m} priority={i < 2} showTown={!town} />)}
+      </div>
+    ) : data.quiet.length > 0 ? (
+      <EmptyState
+        headingLevel="h3"
+        headline={`No deals running in ${place} right now`}
+        body="New offers are added every week. The businesses below are on Pocket Perks and their details are one tap away."
+        ctaLabel="" ctaHref=""
+      />
+    ) : (
+      <EmptyState
+        headingLevel="h3"
+        block={blocks['empty.no_town_results']}
+        headline={`Nothing in ${place} yet`}
+        body="No businesses here so far. Try another town, or see everything on Pocket Perks."
+        ctaLabel="See every town" ctaHref="/?town=all"
+      />
+    )}
+  </section>
+
+  {data.quiet.length > 0 && (
+    <section aria-labelledby="quiet-title" class="block">
+      <div class="section-head">
+        <h2 id="quiet-title">Also in {place}</h2>
+      </div>
+      <p class="quiet-note">On Pocket Perks, with no deal running today.</p>
+      <div class="grid biz-grid">
+        {data.quiet.map((m) => <BusinessCard merchant={m} showTown={!town} />)}
+      </div>
+    </section>
+  )}
+</div>
+
+{how?.steps && how.steps.length > 0 && (
+  <section class="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <h2 id="how-title">How it works</h2>
+      <ol class="how-steps list-plain">
+        {how.steps.map((step, i) => (
+          <li>
+            <span class="step-num" aria-hidden="true">{i + 1}</span>
+            <h3>{step.title}</h3>
+            <p>{step.body}</p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  </section>
+)}
+
+<section class="wrap section">
+  <div class="signup-panel">
+    <NewsletterForm
+      source={town ? `town:${town.slug}` : 'home'}
+      settings={settings}
+      headline={newsletter?.headline}
+      body={newsletter?.body}
+      ctaLabel={newsletter?.cta_label}
+      finePrint={newsletter?.fine_print}
+    />
+  </div>
+</section>
+
+<style>
+  .town-hero { background: var(--pp-deep); color: var(--pp-white); }
+  .town-hero-inner { padding-block: var(--pp-space-5); }
+  @media (min-width: 48rem) { .town-hero-inner { padding-block: var(--pp-space-6); } }
+  .town-hero h1 { color: var(--pp-white); margin-bottom: var(--pp-space-2); max-width: 40rem; }
+  .town-sub { color: rgba(255, 255, 255, 0.88); margin-bottom: var(--pp-space-4); }
+
+  .town-line {
+    display: flex; align-items: center; gap: var(--pp-space-3); flex-wrap: wrap;
+    margin: 0 0 var(--pp-space-4); font-size: var(--pp-text-sm);
+    color: rgba(255, 255, 255, 0.92);
+  }
+  .town-now strong { color: var(--pp-white); }
+  .town-change {
+    min-height: var(--pp-tap-min); padding-inline: var(--pp-space-4);
+    background: var(--pp-action-bg); color: var(--pp-action-text);
+    border: 0; border-radius: var(--pp-radius-chip);
+    font-size: var(--pp-text-sm); font-weight: 700; cursor: pointer;
+  }
+  .town-change:hover { background: color-mix(in srgb, var(--pp-action-bg) 88%, black); }
+
+  .hero-search-wrap { position: relative; max-width: 40rem; }
+  .hero-search { display: flex; gap: var(--pp-space-2); }
+  .hero-search .input { flex: 1; min-width: 0; border-color: transparent; }
+  .town-stats {
+    margin: var(--pp-space-3) 0 0; font-size: var(--pp-text-sm);
+    color: rgba(255, 255, 255, 0.82); font-variant-numeric: tabular-nums;
+  }
+  .town-hero :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+
+  .cat-row { margin-bottom: var(--pp-space-5); }
+  .block + .block { margin-top: var(--pp-space-7); }
+  .quiet-note { color: var(--pp-muted); font-size: var(--pp-text-sm); margin: calc(-1 * var(--pp-space-2)) 0 var(--pp-space-4); }
+
+  .how { background: var(--pp-surface); border-block: 1px solid var(--pp-line); padding-block: var(--pp-space-7); }
+  .how h2 { margin-bottom: var(--pp-space-5); }
+  .how-steps { display: grid; gap: var(--pp-space-5); grid-template-columns: 1fr; }
+  @media (min-width: 40rem) { .how-steps { grid-template-columns: repeat(3, 1fr); } }
+  .how-steps li { position: relative; padding-left: var(--pp-space-6); }
+  .step-num {
+    position: absolute; left: 0; top: 0;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--pp-lime); color: var(--pp-ink);
+    display: grid; place-items: center; font-weight: 700; font-size: var(--pp-text-sm);
+  }
+  .how-steps h3 { font-size: var(--pp-text-lg); margin-bottom: var(--pp-space-1); }
+  .how-steps p { color: var(--pp-muted); font-size: var(--pp-text-sm); margin: 0; }
+
+  .signup-panel {
+    background: var(--pp-surface);
+    border: 1px solid var(--pp-line);
+    border-left: var(--pp-stitch);
+    border-radius: var(--pp-radius-card);
+    padding: var(--pp-space-5);
+    box-shadow: var(--pp-shadow-card);
+  }
+</style>

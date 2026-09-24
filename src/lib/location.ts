@@ -14,8 +14,8 @@ import type { Town } from './types';
  *   1. ?town=<slug> in the URL — an explicit, shareable request
  *   2. ?town=all — deliberately asking to see everything
  *   3. the /<town> page being viewed
- *   4. the pp_town cookie — what they chose last time
- *   5. the first active town
+ *   4. the pp_town cookie — what they chose last time ("all" included)
+ *   5. the first active town, flagged isDefault so the homepage can ask
  *
  * Any page using this must send `Vary: Cookie`, or the CDN will hand one
  * visitor's town to the next visitor.
@@ -52,7 +52,11 @@ export function resolveTownContext(
   const fromPath = byslug(pathTownSlug);
   if (fromPath) return { town: fromPath, showingAll: false, isDefault: false, towns };
 
-  const fromCookie = byslug(cookies.get(TOWN_COOKIE)?.value);
+  const cookie = cookies.get(TOWN_COOKIE)?.value;
+  // "all" is a remembered choice too: someone who asked for every town
+  // should not be asked to pick one again on their next visit.
+  if (cookie === 'all') return { town: null, showingAll: true, isDefault: false, towns };
+  const fromCookie = byslug(cookie);
   if (fromCookie) return { town: fromCookie, showingAll: false, isDefault: false, towns };
 
   // Only one town in the system means there is no choice to make, so this is

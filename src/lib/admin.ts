@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import type { AstroCookies } from 'astro';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { zonedInputToIso, isoToZonedInput } from './format';
 
 /**
  * Admin session handling.
@@ -66,7 +67,7 @@ export function getAuthClient(cookies: AstroCookies, request: Request): Supabase
   return createServerClient(
     import.meta.env.PUBLIC_SUPABASE_URL,
     import.meta.env.PUBLIC_SUPABASE_ANON_KEY,
-    { cookies: cookieAdapter(cookies, request) }
+    { cookies: cookieAdapter(cookies, request), db: { retry: false } }
   );
 }
 
@@ -130,21 +131,42 @@ export function int(form: FormData, key: string, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback;
 }
 
-/** datetime-local gives "2026-09-01T17:30" with no zone. Treat as Eastern. */
+/**
+ * datetime-local gives "2026-09-01T17:30" with no zone. It is read as Ohio
+ * time — the zone every business on the site is in — never as the server's
+ * UTC clock, which made deals end hours earlier than the date typed.
+ */
 export function timestamp(form: FormData, key: string): string | null {
-  const value = str(form, key);
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  return zonedInputToIso(str(form, key));
 }
 
-/** Renders an ISO timestamp back into a datetime-local input value. */
+/** Renders an ISO timestamp back into a datetime-local input value, in Ohio time. */
 export function toLocalInput(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return isoToZonedInput(iso);
+}
+
+/**
+ * Did a write actually change something?
+ *
+ * An UPDATE that matches no row — because the record was removed in
+ * another tab, or a permission quietly filtered it out — returns no error
+ * at all, just nothing. Treating that as success is how a dashboard ends up
+ * saying "Saved" when nothing was saved. Every write selects its rows back
+ * and passes the result through this.
+ */
+export function writeFailure(
+  result: { error: { code?: string; message?: string } | null; data?: unknown },
+  expectRows = true
+): string | null {
+  if (result.error) {
+    console.error('[pocket-perks admin] write failed', result.error.code ?? '', String(result.error.message ?? '').slice(0, 200));
+    return humanError(result.error);
+  }
+  if (expectRows) {
+    const rows = Array.isArray(result.data) ? result.data.length : result.data ? 1 : 0;
+    if (rows === 0) return 'Nothing was saved — that record could not be found. Reload the page and try again.';
+  }
+  return null;
 }
 
 /**
@@ -177,6 +199,11 @@ export function humanError(error: { code?: string; message?: string } | null): s
   if (/deals_window/.test(message)) return 'The end date has to be after the start date.';
   if (/deals_code_format/.test(message)) return 'Coupon codes can use letters, numbers, dots and dashes only.';
   if (/deals_headline_len/.test(message)) return 'The headline needs to be between 3 and 120 characters.';
+  if (/deals_restrictions_len/.test(message)) return 'Keep the short limits line under 120 characters. Longer detail belongs in Terms.';
+  if (/merchant_hours_complete/.test(message)) return 'Each open day needs both an opening and a closing time.';
+  if (/towns_state_format|merchants_state_format/.test(message)) return 'State should be two letters, e.g. OH.';
+  if (/_lat_range|_lng_range/.test(message)) return 'Latitude must be between -90 and 90, and longitude between -180 and 180.';
+  if (error.code === '42501') return 'Your account does not have permission to make that change.';
   if (/_len\b/.test(message)) return 'One of the fields is too long. Shorten it and try again.';
 
   return 'That could not be saved. Check the fields and try again.';

@@ -46,7 +46,7 @@ const showPicker = towns.length > 1;
           <li>
             <a
               href={item.href}
-              aria-current={path === item.href ? 'page' : undefined}
+              aria-current={path === item.href.split('#')[0] && !item.href.includes('#') ? 'page' : undefined}
               target={item.opens_new_tab ? '_blank' : undefined}
               rel={item.opens_new_tab ? 'noopener noreferrer' : undefined}
             >{item.label}</a>
@@ -55,11 +55,13 @@ const showPicker = towns.length > 1;
       </ul>
     </nav>
 
-    {showPicker ? (
-      <LocationPicker context={townContext} variant="header" />
-    ) : (
-      <a href="/deals" class="btn btn-primary btn-sm header-cta">Find a deal</a>
-    )}
+    <div class="header-action">
+      {showPicker ? (
+        <LocationPicker context={townContext} />
+      ) : (
+        <a href="/deals" class="btn btn-primary btn-sm">Find a deal</a>
+      )}
+    </div>
   </div>
 </header>
 
@@ -76,22 +78,49 @@ const showPicker = towns.length > 1;
   .announce-inner { padding-block: var(--pp-space-2); }
   .announce a { color: var(--pp-lime-300); font-weight: 600; }
 
+  /* Sticky on larger screens, where there is height to spare. On a phone
+     the header scrolls away with the page, because a sticky two-row header
+     would permanently cover an eighth of the screen. */
   .site-header {
-    position: sticky; top: 0; z-index: 20;
-    background: color-mix(in srgb, var(--pp-header-bg) 92%, transparent);
-    backdrop-filter: blur(8px);
+    position: relative; z-index: 20;
+    background: var(--pp-header-bg);
     border-bottom: 1px solid var(--pp-line);
   }
-  .header-inner {
-    display: flex; align-items: center; gap: var(--pp-space-4);
-    min-height: 60px;
+  @media (min-width: 48rem) {
+    .site-header {
+      position: sticky; top: 0;
+      background: color-mix(in srgb, var(--pp-header-bg) 94%, transparent);
+      backdrop-filter: blur(8px);
+    }
   }
-  .brand { flex-shrink: 0; display: flex; align-items: center; }
-  .brand img { width: auto; height: 30px; max-width: 170px; object-fit: contain; }
 
-  nav { flex: 1; min-width: 0; }
-  .nav-list { display: flex; gap: var(--pp-space-1); overflow-x: auto; scrollbar-width: none; }
-  .nav-list::-webkit-scrollbar { display: none; }
+  /* Phone: logo and town on the first row, the navigation on its own full
+     row beneath, so every item is visible — none hide off the edge. */
+  .header-inner {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: 'brand action' 'nav nav';
+    align-items: center; column-gap: var(--pp-space-3);
+    padding-block: var(--pp-space-2) 0;
+  }
+  @media (min-width: 48rem) {
+    .header-inner {
+      grid-template-columns: auto 1fr auto;
+      grid-template-areas: 'brand nav action';
+      min-height: 64px; padding-block: 0;
+    }
+  }
+  .brand { grid-area: brand; display: flex; align-items: center; min-height: var(--pp-tap-min); }
+  .brand img { width: auto; height: 30px; max-width: 170px; object-fit: contain; }
+  .header-action { grid-area: action; justify-self: end; min-width: 0; }
+
+  nav { grid-area: nav; min-width: 0; }
+  .nav-list { display: flex; gap: var(--pp-space-1); flex-wrap: wrap; }
+  @media (max-width: 47.99rem) {
+    .nav-list { justify-content: space-between; border-top: 1px solid var(--pp-line); margin-top: var(--pp-space-2); }
+    .nav-list li { flex: 1; }
+    .nav-list a { justify-content: center; width: 100%; }
+  }
   .nav-list a {
     display: inline-flex; align-items: center;
     min-height: var(--pp-tap-min);
@@ -103,15 +132,12 @@ const showPicker = towns.length > 1;
   .nav-list a:hover { background: var(--pp-deep-050); color: var(--pp-link); }
   .nav-list a[aria-current='page'] {
     color: var(--pp-link);
-    box-shadow: inset 0 -2px 0 var(--pp-accent);
+    box-shadow: inset 0 -3px 0 var(--pp-accent);
     border-radius: 0;
   }
 
-  /* Below 30rem the header needs three rows to fit everything. The CTA drops
-     because the nav already leads to the same place. */
-  @media (max-width: 30rem) {
-    .header-inner { gap: var(--pp-space-2); }
-    .brand img { height: 26px; max-width: 120px; }
-    .header-cta { display: none; }
+  @media (max-width: 22rem) {
+    .brand img { height: 26px; max-width: 110px; }
+    .nav-list a { padding-inline: var(--pp-space-2); }
   }
 </style>

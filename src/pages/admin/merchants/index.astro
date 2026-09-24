@@ -11,7 +11,7 @@ const flash = params.get('saved');
 
 let request = db
   .from('merchants')
-  .select('id, name, slug, status, tier, is_featured, display_priority, created_at, category:categories ( name ), town:towns ( name ), deals ( id, status )')
+  .select('id, name, slug, status, tier, is_featured, display_priority, created_at, category:categories ( name ), town:towns ( name ), deals ( id, status, ends_at )')
   .order('status')
   .order('name');
 
@@ -29,7 +29,9 @@ const statuses = [
   { key: 'archived', label: 'Archived' },
 ];
 
-const liveDeals = (m: any) => (m.deals ?? []).filter((d: any) => d.status === 'active').length;
+// Live means Live and not yet ended — the same rule the plan limit uses.
+const liveDeals = (m: any) => (m.deals ?? []).filter((d: any) =>
+  d.status === 'active' && (!d.ends_at || new Date(d.ends_at).getTime() > Date.now())).length;
 const dealCap = (tier: string) => (tier === 'standard' ? 2 : 3);
 ---
 
@@ -47,9 +49,9 @@ const dealCap = (tier: string) => (tier === 'standard' ? 2 : 3);
     {(query || status !== 'all') && <a class="btn btn-ghost btn-sm" href="/admin/merchants">Clear</a>}
   </form>
 
-  <div class="chip-row" role="list" aria-label="Filter by status">
+  <div class="chip-row" role="group" aria-label="Filter by status">
     {statuses.map((s) => (
-      <a class="chip" role="listitem"
+      <a class="chip"
          href={`/admin/merchants?status=${s.key}${query ? `&q=${encodeURIComponent(query)}` : ''}`}
          aria-current={status === s.key ? 'true' : undefined}>{s.label}</a>
     ))}

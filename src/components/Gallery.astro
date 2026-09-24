@@ -1,10 +1,15 @@
 ---
 import type { GalleryItem } from '../lib/types';
+import MediaFrame from './MediaFrame.astro';
 import { imageUrl } from '../lib/format';
 
 interface Props { items: GalleryItem[]; businessName: string; }
 const { items, businessName } = Astro.props;
-if (!items.length) return new Response(null, { status: 200 });
+
+// Render nothing — and never return a Response from a component. Doing that
+// here aborted the streamed page mid-way for every business without photos,
+// which is what left business pages cut off and broken.
+if (!items.length) return;
 ---
 
 <section class="gallery" aria-labelledby="gallery-title">
@@ -17,10 +22,9 @@ if (!items.length) return new Response(null, { status: 200 });
                 data-full={imageUrl(item.media)}
                 data-caption={item.caption ?? ''}
                 aria-label={`Open photo ${index + 1} of ${items.length} from ${businessName}`}>
-          <img src={imageUrl(item.media)}
-               alt={item.media?.alt_text || item.caption || `${businessName} photo ${index + 1}`}
-               width={item.media?.width ?? 600} height={item.media?.height ?? 450}
-               loading={index < 2 ? 'eager' : 'lazy'} decoding="async" />
+          <MediaFrame asset={item.media} mode="box" ratio={4 / 3} kind="photo"
+                      alt={item.media?.alt_text || item.caption || `${businessName} photo ${index + 1}`}
+                      name={businessName} width={640} sizes="(min-width: 48rem) 240px, 60vw" />
         </button>
         {item.caption && <p class="caption">{item.caption}</p>}
       </li>
@@ -32,7 +36,7 @@ if (!items.length) return new Response(null, { status: 200 });
 <dialog class="lightbox" data-lightbox aria-label="Photo viewer">
   <button class="lb-close" type="button" data-lightbox-close aria-label="Close photo">×</button>
   <button class="lb-nav lb-prev" type="button" data-lightbox-prev aria-label="Previous photo">‹</button>
-  <img data-lightbox-image src="" alt="" />
+  <img data-lightbox-image alt="" />
   <p class="lb-caption" data-lightbox-caption></p>
   <button class="lb-nav lb-next" type="button" data-lightbox-next aria-label="Next photo">›</button>
 </dialog>
@@ -47,7 +51,7 @@ if (!items.length) return new Response(null, { status: 200 });
   */
   .gallery-strip {
     display: grid; gap: var(--pp-space-3);
-    grid-auto-flow: column; grid-auto-columns: minmax(13rem, 1fr);
+    grid-auto-flow: column; grid-auto-columns: min(15rem, 70vw);
     overflow-x: auto; scroll-snap-type: x proximity;
     scrollbar-width: none;
     margin-inline: calc(-1 * var(--pp-space-4));
@@ -69,12 +73,12 @@ if (!items.length) return new Response(null, { status: 200 });
     border: 1px solid var(--pp-line); border-radius: var(--pp-radius-inset);
     overflow: hidden; background: var(--pp-surface);
   }
-  .shot img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+  /* The whole photo shows in the thumbnail too: contained, not cropped. */
   .shot:hover { border-color: var(--pp-accent); }
   .caption { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: var(--pp-space-2) 0 0; }
 
   .lightbox {
-    border: 0; padding: 0; max-width: 100vw; max-height: 100vh;
+    border: 0; padding: 0; max-width: 100vw; max-height: 100dvh;
     width: 100%; height: 100%; background: rgba(6, 14, 34, 0.94);
   }
   .lightbox::backdrop { background: rgba(6, 14, 34, 0.94); }

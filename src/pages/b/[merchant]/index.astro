@@ -1,52 +1,81 @@
 ---
 import Base from '../../../layouts/Base.astro';
 import DealCard from '../../../components/DealCard.astro';
-import MerchantCard from '../../../components/MerchantCard.astro';
+import BusinessCard from '../../../components/BusinessCard.astro';
 import Gallery from '../../../components/Gallery.astro';
+import MediaFrame from '../../../components/MediaFrame.astro';
 import EmptyState from '../../../components/EmptyState.astro';
-import { getMerchant, getRelatedMerchants, getSiteChrome, CACHE_PUBLIC } from '../../../lib/queries';
+import ServiceNotice from '../../../components/ServiceNotice.astro';
+import { getMerchant, getRelatedMerchants, getSiteChrome } from '../../../lib/queries';
+import { cachePublic, markUnavailable } from '../../../lib/http';
+import { logDataError } from '../../../lib/errors';
 import {
-  imageUrl, imageSrcSet, initials, openStatus, groupedHours,
-  telHref, directionsHref, formatAddress, displayUrl, dayName,
+  imageUrl, openStatus, groupedHours, telHref, directionsHref, formatAddress, displayUrl, dayName,
 } from '../../../lib/format';
-
-const { merchant: slug } = Astro.params;
-const merchant = await getMerchant(slug!);
-
-if (!merchant) {
-  return Astro.rewrite('/404');
-}
-
-Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
-
-const { blocks } = await getSiteChrome();
-const related = await getRelatedMerchants(merchant);
-
-const status = openStatus(merchant.hours);
-const hours = groupedHours(merchant.hours);
-const address = formatAddress(merchant);
-const tel = telHref(merchant);
-const directions = directionsHref(merchant);
-const deals = merchant.deals ?? [];
+import type { Merchant } from '../../../lib/types';
 
 /**
- * LocalBusiness structured data, emitted only from fields that are actually
- * populated. Inventing an aggregateRating or a priceRange we cannot observe
- * would be invalid markup and a manual-action risk.
+ * A business page, e.g. /b/crossroads-pizza.
+ *
+ * Three outcomes, kept strictly apart:
+ *   found        the page, cached for a minute
+ *   not found    a real 404 — only when the database says it does not exist
+ *   unavailable  a "try again" page, 503, never cached
+ *
+ * These used to collapse into one: any failure looked like "not found", and
+ * a component on this page aborted the response mid-stream whenever the
+ * business had no gallery photos, leaving a half-drawn page.
  */
-const localBusiness: Record<string, unknown> = {
+const { merchant: slug } = Astro.params;
+const { blocks } = await getSiteChrome(Astro.locals);
+
+let merchant: Merchant | null = null;
+let related: Merchant[] = [];
+let unavailable = false;
+
+try {
+  merchant = await getMerchant(slug!);
+} catch (error) {
+  logDataError(`business page ${slug}`, error);
+  unavailable = true;
+}
+
+if (!unavailable && !merchant) return Astro.rewrite('/404');
+
+if (merchant) {
+  // Suggestions are a nice-to-have. Their failure never costs the page.
+  try { related = await getRelatedMerchants(merchant); } catch { related = []; }
+}
+
+if (unavailable) markUnavailable(Astro);
+else cachePublic(Astro);
+
+const siteUrl = (import.meta.env.PUBLIC_SITE_URL ?? '').replace(/\/$/, '');
+const deals = merchant?.deals ?? [];
+const status = openStatus(merchant?.hours);
+const hours = groupedHours(merchant?.hours);
+const address = merchant ? formatAddress(merchant) : null;
+const tel = merchant ? telHref(merchant) : null;
+const directions = merchant ? directionsHref(merchant) : null;
+const socials = merchant ? [merchant.facebook_url, merchant.instagram_url].filter(Boolean) as string[] : [];
+
+/**
+ * LocalBusiness structured data, from populated fields only. Inventing a
+ * rating or price range we cannot observe would be invalid markup.
+ */
+const localBusiness: Record<string, unknown> | null = merchant && {
   '@context': 'https://schema.org',
   '@type': 'LocalBusiness',
   name: merchant.name,
-  url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}`,
+  url: `${siteUrl}/b/${merchant.slug}`,
   ...(merchant.description && { description: merchant.description }),
   ...(merchant.phone_e164 && { telephone: merchant.phone_e164 }),
-  ...(merchant.website_url && { sameAs: [merchant.website_url, merchant.facebook_url, merchant.instagram_url].filter(Boolean) }),
-  ...(merchant.logo && { image: imageUrl(merchant.logo, 600) }),
+  ...((merchant.website_url || socials.length) && { sameAs: [merchant.website_url, ...socials].filter(Boolean) }),
+  ...((merchant.logo || merchant.cover) && { image: imageUrl(merchant.cover ?? merchant.logo) }),
   ...(merchant.address_line1 && {
     address: {
       '@type': 'PostalAddress',
-      streetAddress: merchant.address_line1,
+      streetAddress: [merchant.address_line1, merchant.address_line2].filter(Boolean).join(', '),
       addressLocality: merchant.city ?? merchant.town?.name,
       addressRegion: merchant.state_code,
       postalCode: merchant.postal_code,
@@ -56,7 +85,7 @@ const localBusiness: Record<string, unknown> = {
   ...(merchant.latitude != null && merchant.longitude != null && {
     geo: { '@type': 'GeoCoordinates', latitude: merchant.latitude, longitude: merchant.longitude },
   }),
-  ...(merchant.hours?.length && {
+  ...(merchant.hours?.some((h) => !h.is_closed && h.opens_at && h.closes_at) && {
     openingHoursSpecification: merchant.hours
       .filter((h) => !h.is_closed && h.opens_at && h.closes_at)
       .map((h) => ({
@@ -66,102 +95,96 @@ const localBusiness: Record<string, unknown> = {
         closes: h.closes_at,
       })),
   }),
-  ...(deals.length && {
+  ...(deals.length > 0 && {
     makesOffer: deals.map((d) => ({
       '@type': 'Offer',
       name: d.headline,
       ...(d.description && { description: d.description }),
       ...(d.ends_at && { availabilityEnds: d.ends_at }),
-      url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}/${d.slug}`,
+      url: `${siteUrl}/b/${merchant.slug}/${d.slug}`,
     })),
   }),
 };
 
-const cover = merchant.cover;
+const cover = merchant?.cover ?? null;
+const place = merchant?.town ? ` in ${merchant.town.name}, ${merchant.town.state_code}` : '';
 ---
 
 <Base
-  title={merchant.seo_title ?? `${merchant.name} — Deals & Info`}
-  description={
+  title={merchant ? (merchant.seo_title ?? `${merchant.name} — Deals & Info`) : 'Temporarily unavailable'}
+  description={merchant ? (
     merchant.seo_description ??
     merchant.tagline ??
-    `${merchant.name}${merchant.town ? ` in ${merchant.town.name}, ${merchant.town.state_code}` : ''}. ${deals.length ? `${deals.length} current ${deals.length === 1 ? 'offer' : 'offers'}, hours, phone and directions.` : 'Hours, phone and directions.'}`
-  }
-  canonicalPath={`/b/${merchant.slug}`}
-  ogImage={imageUrl(cover ?? merchant.logo, 1200, 80)}
-  schema={[localBusiness]}
-  breadcrumbs={[
+    `${merchant.name}${place}. ${deals.length ? `${deals.length} current ${deals.length === 1 ? 'offer' : 'offers'}, hours, phone and directions.` : 'Hours, phone and directions.'}`
+  ) : undefined}
+  canonicalPath={`/b/${slug}`}
+  ogImage={imageUrl(cover ?? merchant?.logo)}
+  noindex={unavailable}
+  schema={localBusiness ? [localBusiness] : []}
+  breadcrumbs={merchant ? [
     { name: 'Home', href: '/' },
-    { name: 'Businesses', href: '/businesses' },
+    ...(merchant.town ? [{ name: merchant.town.name, href: `/${merchant.town.slug}` }] : []),
     { name: merchant.name, href: `/b/${merchant.slug}` },
-  ]}
+  ] : []}
 >
+  {unavailable || !merchant ? (
+    <ServiceNotice />
+  ) : (
   <article class="profile" data-merchant-id={merchant.id} data-track-merchant-view>
     {cover && (
       <div class="cover">
-        <img
-          src={imageUrl(cover, 1400, 70)}
-          srcset={imageSrcSet(cover, 900)}
-          sizes="100vw"
-          alt={cover.alt_text || ''}
-          width="1400" height="440"
-          fetchpriority="high" decoding="async"
-        />
+        {/* The whole photo, never cropped: the frame takes the photo's own
+            shape, up to a sensible height. */}
+        <MediaFrame asset={cover} mode="fit" kind="photo" alt={cover.alt_text || ''}
+                    name={merchant.name} width={1600} priority={true} sizes="100vw" />
       </div>
     )}
 
-    <header class={`head ${cover ? 'has-cover' : ''}`}>
+    <header class="head">
       <div class="wrap head-inner">
+        <nav class="crumbs" aria-label="Breadcrumb">
+          {merchant.town ? <a href={`/${merchant.town.slug}`}>← Deals in {merchant.town.name}</a> : <a href="/">← All deals</a>}
+        </nav>
+
         <div class="identity">
-          <div class="logo">
-            {merchant.logo ? (
-              <img
-                src={imageUrl(merchant.logo, 200)}
-                srcset={imageSrcSet(merchant.logo, 100)}
-                alt={merchant.logo.alt_text || merchant.name}
-                width="100" height="100" fetchpriority="high" decoding="async"
-              />
-            ) : (
-              <span class="logo-fallback" aria-hidden="true">{initials(merchant.name)}</span>
-            )}
-          </div>
+          <MediaFrame asset={merchant.logo} mode="tile" kind="logo" alt={`${merchant.name} logo`}
+                      name={merchant.name} width={400} priority={true} class="profile-logo" />
 
           <div class="identity-text">
             <h1>{merchant.name}</h1>
             <p class="sub">
-              {merchant.category && <a href={`/deals?category=${merchant.category.slug}`}>{merchant.category.name}</a>}
-              {merchant.town && <> · <a href={`/${merchant.town.slug}`}>{merchant.town.name}, {merchant.town.state_code}</a></>}
+              {merchant.category && <a href={`/deals?category=${merchant.category.slug}${merchant.town ? `&town=${merchant.town.slug}` : ''}`}>{merchant.category.name}</a>}
+              {merchant.category && merchant.town && <span aria-hidden="true"> · </span>}
+              {merchant.town && <a href={`/${merchant.town.slug}`}>{merchant.town.name}, {merchant.town.state_code}</a>}
             </p>
-            {status && <p class={`status ${status.isOpen ? 'is-open' : ''}`}>{status.label}</p>}
+            {status && <p class:list={['status', { 'is-open': status.isOpen }]}>{status.label}</p>}
             {merchant.tagline && <p class="tagline">{merchant.tagline}</p>}
           </div>
         </div>
 
-        {/*
-          Actions, ordered by how directly each one moves a customer toward
-          the door. Every one is a measurable intent event, and every one is
-          a real link that works without JavaScript.
-        */}
-        <div class="actions">
-          {tel && (
-            <a class="btn btn-primary" href={tel}
-               data-track="call_click" data-merchant={merchant.id}>
-              Call {merchant.phone_display}
-            </a>
-          )}
-          {directions && (
-            <a class="btn btn-outline" href={directions} target="_blank" rel="noopener noreferrer"
-               data-track="directions_click" data-merchant={merchant.id}>
-              Get directions
-            </a>
-          )}
-          {merchant.website_url && (
-            <a class="btn btn-outline" href={merchant.website_url} target="_blank" rel="noopener noreferrer"
-               data-track="website_click" data-merchant={merchant.id}>
-              Visit website
-            </a>
-          )}
-        </div>
+        {/* Ordered by how directly each moves a customer toward the door.
+            Every one is a real link that works without JavaScript. */}
+        {(tel || directions || merchant.website_url) && (
+          <div class="actions">
+            {tel && (
+              <a class="btn btn-primary" href={tel} data-track="call_click" data-merchant={merchant.id}>
+                Call {merchant.phone_display}
+              </a>
+            )}
+            {directions && (
+              <a class="btn btn-outline" href={directions} target="_blank" rel="noopener noreferrer"
+                 data-track="directions_click" data-merchant={merchant.id}>
+                Get directions<span class="sr-only"> (opens in a new tab)</span>
+              </a>
+            )}
+            {merchant.website_url && (
+              <a class="btn btn-outline" href={merchant.website_url} target="_blank" rel="noopener noreferrer"
+                 data-track="website_click" data-merchant={merchant.id}>
+                Visit website<span class="sr-only"> (opens in a new tab)</span>
+              </a>
+            )}
+          </div>
+        )}
       </div>
     </header>
 
@@ -169,23 +192,24 @@ const cover = merchant.cover;
       <div class="main-col">
         <section aria-labelledby="deals-title">
           <h2 id="deals-title">
-            {deals.length
-              ? `All ${deals.length} current ${deals.length === 1 ? 'offer' : 'offers'}`
-              : 'Offers'}
+            {deals.length ? `${deals.length} current ${deals.length === 1 ? 'deal' : 'deals'}` : 'Deals'}
           </h2>
           {deals.length ? (
-            <div class="grid">
+            <div class="grid deal-grid">
               {deals.map((deal, i) => (
                 <DealCard deal={{ ...deal, merchant }} priority={i === 0} showMerchant={false} />
               ))}
             </div>
           ) : (
-            <EmptyState block={blocks['empty.merchant_no_deals']} ctaLabel="" ctaHref="" />
+            <EmptyState headingLevel="h3" block={blocks['empty.merchant_no_deals']}
+                        headline="No deal running right now"
+                        body="This business is on Pocket Perks but has nothing live today. Their details are below."
+                        ctaLabel="" ctaHref="" />
           )}
         </section>
 
-        {/* Photos supplied during onboarding, not scraped. Placed after the
-            deals, because someone landing here came for an offer first. */}
+        {/* Photos supplied by the business, not scraped. After the deals,
+            because someone landing here came for an offer first. */}
         <Gallery items={merchant.gallery ?? []} businessName={merchant.name} />
 
         {merchant.description && (
@@ -196,9 +220,9 @@ const cover = merchant.cover;
         )}
       </div>
 
-      <aside class="side-col" aria-label="Business details">
+      <aside class="side-col" aria-labelledby="details-title">
         <div class="info-card card">
-          <h2 class="info-title">Details</h2>
+          <h2 class="info-title" id="details-title">Details</h2>
           <dl class="info-list">
             {address && (
               <div>
@@ -206,7 +230,7 @@ const cover = merchant.cover;
                 <dd>
                   {directions ? (
                     <a href={directions} target="_blank" rel="noopener noreferrer"
-                       data-track="directions_click" data-merchant={merchant.id}>{address}</a>
+                       data-track="directions_click" data-merchant={merchant.id}>{address}<span class="sr-only"> (map, opens in a new tab)</span></a>
                   ) : address}
                 </dd>
               </div>
@@ -223,7 +247,7 @@ const cover = merchant.cover;
                 <dd>
                   <a href={merchant.website_url} target="_blank" rel="noopener noreferrer"
                      data-track="website_click" data-merchant={merchant.id}>
-                    {displayUrl(merchant.website_url)}
+                    {displayUrl(merchant.website_url)}<span class="sr-only"> (opens in a new tab)</span>
                   </a>
                 </dd>
               </div>
@@ -238,22 +262,25 @@ const cover = merchant.cover;
                 </dd>
               </div>
             )}
-            {(merchant.facebook_url || merchant.instagram_url) && (
+            {socials.length > 0 && (
               <div>
                 <dt>Social</dt>
                 <dd class="row">
                   {merchant.facebook_url && (
                     <a href={merchant.facebook_url} target="_blank" rel="noopener noreferrer"
-                       data-track="website_click" data-merchant={merchant.id}>Facebook</a>
+                       data-track="website_click" data-merchant={merchant.id}>Facebook<span class="sr-only"> (opens in a new tab)</span></a>
                   )}
                   {merchant.instagram_url && (
                     <a href={merchant.instagram_url} target="_blank" rel="noopener noreferrer"
-                       data-track="website_click" data-merchant={merchant.id}>Instagram</a>
+                       data-track="website_click" data-merchant={merchant.id}>Instagram<span class="sr-only"> (opens in a new tab)</span></a>
                   )}
                 </dd>
               </div>
             )}
           </dl>
+          <p class="listing-note">
+            Listed on Pocket Perks by the business. Offers are set by {merchant.name}; ask them if anything is unclear.
+          </p>
         </div>
       </aside>
     </div>
@@ -261,46 +288,27 @@ const cover = merchant.cover;
     {related.length > 0 && (
       <section class="wrap section" aria-labelledby="related-title">
         <h2 id="related-title">More local businesses</h2>
-        <div class="grid">
-          {related.map((m) => <MerchantCard merchant={m} />)}
+        <div class="grid biz-grid">
+          {related.map((m) => <BusinessCard merchant={m} />)}
         </div>
       </section>
     )}
   </article>
+  )}
 </Base>
 
 <style>
-  .cover { background: var(--pp-deep); aspect-ratio: 32 / 10; max-height: 320px; overflow: hidden; }
-  .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .cover { background: var(--pp-frame); border-bottom: 1px solid var(--pp-line); }
+  .cover :global(.mf-fit) { --mf-max: min(62vh, 28rem); --mf-min: 9rem; max-width: 1180px; margin-inline: auto; }
 
   .head { background: var(--pp-surface); border-bottom: 1px solid var(--pp-line); }
-  .head-inner { padding-block: var(--pp-space-5); display: flex; flex-direction: column; gap: var(--pp-space-4); }
-  @media (min-width: 48rem) {
-    .head-inner { flex-direction: row; align-items: flex-end; justify-content: space-between; }
-  }
-  .head.has-cover .head-inner { padding-top: var(--pp-space-4); }
+  .head-inner { padding-block: var(--pp-space-4) var(--pp-space-5); display: flex; flex-direction: column; gap: var(--pp-space-4); }
+  .crumbs { font-size: var(--pp-text-sm); font-weight: 600; }
+  .crumbs a { display: inline-flex; min-height: var(--pp-tap-min); align-items: center; }
 
-  .identity { display: flex; gap: var(--pp-space-4); align-items: flex-start; }
-  .logo {
-    width: 96px; height: 96px; flex-shrink: 0;
-    border-radius: var(--pp-radius-card);
-    border: 1px solid var(--pp-line);
-    background: var(--pp-white);
-    display: grid; place-items: center; overflow: hidden;
-    box-shadow: var(--pp-shadow-card);
-  }
-  .head.has-cover .logo { margin-top: -46px; }
-  /* contain, never cover — a cropped logo is a broken logo. */
-  /* contain plus real breathing room. A logo with its own whitespace still
-     needs padding here, or the mark touches the tile edge and reads as
-     cropped even though nothing was cut. */
-  .logo img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
-  .logo-fallback {
-    width: 100%; height: 100%; display: grid; place-items: center;
-    background: var(--pp-deep); color: var(--pp-lime-300);
-    font-family: var(--pp-font-display); font-size: 1.9rem;
-  }
-
+  .identity { display: flex; gap: var(--pp-space-4); align-items: flex-start; flex-wrap: wrap; }
+  .identity :global(.profile-logo) { --tile-h: 88px; --tile-max: 220px; box-shadow: var(--pp-shadow-card); }
+  .identity-text { min-width: min(100%, 14rem); flex: 1; }
   .identity-text h1 { margin-bottom: var(--pp-space-1); }
   .sub { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0 0 var(--pp-space-2); }
   .status { font-size: var(--pp-text-sm); font-weight: 700; color: var(--pp-muted); margin: 0; }
@@ -308,30 +316,31 @@ const cover = merchant.cover;
   .tagline { margin: var(--pp-space-2) 0 0; color: var(--pp-muted); }
 
   .actions { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; }
-  /* On a phone the actions become a full-width stack: one-thumb reachable,
-     no target under 44px. */
+  /* On a phone the actions are a full-width stack: one-thumb reachable. */
   @media (max-width: 30rem) {
     .actions { flex-direction: column; }
-    .actions :global(.btn) { width: 100%; }
+    .actions :global(.btn) { width: 100%; min-height: 48px; }
   }
 
+  /* minmax(0, 1fr), not 1fr: a plain 1fr track refuses to shrink below its
+     widest content, which is what pushed this page 300px past the edge of
+     a phone screen. */
   .body-grid {
     display: grid; gap: var(--pp-space-6);
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     padding-block: var(--pp-space-6);
   }
   @media (min-width: 60rem) { .body-grid { grid-template-columns: minmax(0, 1fr) 20rem; } }
 
-  .main-col { display: flex; flex-direction: column; gap: var(--pp-space-6); }
+  .main-col { display: flex; flex-direction: column; gap: var(--pp-space-6); min-width: 0; }
   .about p { color: var(--pp-muted); }
 
   .info-card { padding: var(--pp-space-4); gap: var(--pp-space-3); }
   .info-title { font-size: var(--pp-text-lg); margin: 0; }
   .info-list { margin: 0; display: flex; flex-direction: column; gap: var(--pp-space-3); }
-  .info-list dt {
-    font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted);
-    letter-spacing: 0.03em;
-  }
-  .info-list dd { margin: 0.15rem 0 0; font-size: var(--pp-text-sm); }
+  .info-list dt { font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted); letter-spacing: 0.03em; }
+  .info-list dd { margin: 0.15rem 0 0; font-size: var(--pp-text-sm); overflow-wrap: anywhere; }
+  .info-list dd a { display: inline-block; padding-block: 0.3rem; }
   .hours { display: flex; flex-direction: column; gap: 0.1rem; font-variant-numeric: tabular-nums; }
+  .listing-note { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: 0; }
 </style>

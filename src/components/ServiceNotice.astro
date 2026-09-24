@@ -1,0 +1,34 @@
+---
+/**
+ * Shown when the database could not be reached.
+ *
+ * Plain language, no error codes, and always a way forward. The technical
+ * detail goes to the server log, never to the visitor.
+ */
+interface Props { headingLevel?: 'h1' | 'h2'; }
+const { headingLevel = 'h1' } = Astro.props;
+const Heading = headingLevel;
+const retryHref = Astro.url.pathname + Astro.url.search;
+---
+
+<div class="wrap section service-notice" role="alert">
+  <Heading>We can’t load deals right now</Heading>
+  <p>
+    Pocket Perks is having trouble reaching its database. This is usually
+    fixed within a minute or two, and nothing you did caused it.
+  </p>
+  <div class="row">
+    <a class="btn btn-primary" href={retryHref}>Try again</a>
+    <a class="btn btn-outline" href="/">Go to the homepage</a>
+  </div>
+</div>
+
+<style>
+  .service-notice {
+    text-align: center; max-width: 36rem; margin-inline: auto;
+    display: flex; flex-direction: column; align-items: center; gap: var(--pp-space-3);
+    padding-block: var(--pp-space-8);
+  }
+  .service-notice p { color: var(--pp-muted); }
+  .service-notice .row { justify-content: center; }
+</style>

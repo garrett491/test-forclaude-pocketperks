@@ -1,46 +1,74 @@
 ---
 import Base from '../layouts/Base.astro';
-import DealCard from '../components/DealCard.astro';
+import BusinessCard from '../components/BusinessCard.astro';
 import EmptyState from '../components/EmptyState.astro';
 import Pagination from '../components/Pagination.astro';
-import MerchantCard from '../components/MerchantCard.astro';
+import ServiceNotice from '../components/ServiceNotice.astro';
 import { resolveTownContext, townFilter, withTown } from '../lib/location';
 import {
-  listDealsGrouped, getCategoriesWithCounts, getTowns, getSiteChrome,
-  listMerchantsWithoutLiveDeals, PAGE_SIZE, CACHE_PUBLIC,
+  listBusinessCards, getCategoriesWithCounts, getTowns, getSiteChrome,
+  listMerchantsWithoutLiveDeals, searchEverything, PAGE_SIZE,
 } from '../lib/queries';
+import { cachePublic, markUnavailable } from '../lib/http';
+import { logDataError } from '../lib/errors';
+import type { Merchant, Town, Category } from '../lib/types';
+import type { Page } from '../lib/listing';
 
-Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
-
+/**
+ * Every business with a live deal, one card each, filterable by category,
+ * town, featured and ending soon. Filters are plain links, so every
+ * combination is a real, shareable URL that works before any script runs.
+ */
 const params = Astro.url.searchParams;
-const categorySlug = params.get('category') ?? undefined;
-// townSlug is resolved below from URL, cookie and default together.
-const query = params.get('q') ?? undefined;
+const categorySlug = params.get('category') || undefined;
+const query = params.get('q')?.trim() || undefined;
 const featuredOnly = params.get('featured') === '1';
 const endingSoon = params.get('ending') === '1';
 const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
 
-const towns = await getTowns();
-const townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
-const townSlug = townFilter(townContext);
-if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
+const { blocks } = await getSiteChrome(Astro.locals);
 
-const [{ blocks }, categories, results, quietMerchants] = await Promise.all([
-  getSiteChrome(),
-  getCategoriesWithCounts(townSlug),
-  listDealsGrouped({ categorySlug, townSlug, query, featuredOnly, endingSoon, page, pageSize: PAGE_SIZE }),
-  // Businesses with nothing running. Only on the first page, and never while
-  // searching or filtering by featured/ending — in those cases the visitor
-  // asked a specific question and padding the answer is noise.
-  page === 1 && !query && !featuredOnly && !endingSoon
-    ? listMerchantsWithoutLiveDeals({ townSlug, categorySlug })
-    : Promise.resolve([]),
-]);
+let towns: Town[] = [];
+let categories: Array<Category & { deal_count: number }> = [];
+let results: Page<Merchant> = { items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pageCount: 1 };
+let quietMerchants: Merchant[] = [];
+let townContext = resolveTownContext(Astro.url, Astro.cookies, []);
+let unavailable = false;
+
+try {
+  towns = await getTowns(Astro.locals);
+  townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
+  const townSlug = townFilter(townContext);
+  // A typed search uses the full search — names, addresses, phone numbers,
+  // categories and towns as well as deal text — exactly as live search does,
+  // so pressing Search never finds less than typing did.
+  const searched = query && !featuredOnly && !endingSoon && !categorySlug
+    ? await searchEverything(query, townSlug, 60)
+    : null;
+  [categories, results, quietMerchants] = await Promise.all([
+    getCategoriesWithCounts(townSlug),
+    searched
+      ? Promise.resolve({ items: searched.cards, total: searched.cards.length, page: 1, pageSize: 60, pageCount: 1 })
+      : listBusinessCards({ categorySlug, townSlug, query, featuredOnly, endingSoon, page, pageSize: PAGE_SIZE }),
+    // Businesses with nothing running: first page only, and never while
+    // searching or narrowing — the visitor asked a specific question.
+    searched
+      ? Promise.resolve(searched.quiet)
+      : page === 1 && !query && !featuredOnly && !endingSoon
+        ? listMerchantsWithoutLiveDeals({ townSlug, categorySlug })
+        : Promise.resolve([]),
+  ]);
+} catch (error) {
+  logDataError('deals page', error);
+  unavailable = true;
+}
+
+if (unavailable) markUnavailable(Astro);
+else cachePublic(Astro, { varyByTown: towns.length > 1 });
 
 /**
  * Only categories that actually contain a live deal are offered.
- * A filter chip that leads to an empty page is a broken promise, and with a
- * handful of merchants most categories are empty.
+ * A filter chip that leads to an empty page is a broken promise.
  */
 const usableCategories = categories.filter((c) => c.deal_count > 0 || c.slug === categorySlug);
 const activeCategory = categories.find((c) => c.slug === categorySlug);
@@ -64,31 +92,29 @@ function buildUrl(patch: Record<string, string | null>) {
 
 const activeFilters = [
   activeCategory && { label: activeCategory.name, clear: buildUrl({ category: null }) },
-  activeTown && { label: activeTown.name, clear: buildUrl({ town: null }) },
   featuredOnly && { label: 'Featured only', clear: buildUrl({ featured: null }) },
   endingSoon && { label: 'Ending soon', clear: buildUrl({ ending: null }) },
   query && { label: `“${query}”`, clear: buildUrl({ q: null }) },
 ].filter(Boolean) as { label: string; clear: string }[];
 
 const filtersActive = activeFilters.length > 0;
-
-
 ---
 
 <Base
-  title={pageTitle}
+  title={unavailable ? 'Temporarily unavailable' : pageTitle}
   description={
     activeCategory?.seo_description ??
     `Browse current ${activeCategory ? activeCategory.name.toLowerCase() + ' ' : ''}deals and coupons from local businesses. Updated as merchants add them.`
   }
   canonicalPath={categorySlug ? `/deals?category=${categorySlug}` : '/deals'}
-  noindex={!!query || page > 1}
+  noindex={!!query || page > 1 || unavailable}
   breadcrumbs={[
     { name: 'Home', href: '/' },
     { name: 'Deals', href: '/deals' },
     ...(activeCategory ? [{ name: activeCategory.name, href: `/deals?category=${activeCategory.slug}` }] : []),
   ]}
 >
+  {unavailable ? <ServiceNotice /> : (
   <div class="wrap section">
     <header class="page-head">
       <h1>{pageTitle}</h1>
@@ -127,6 +153,7 @@ const filtersActive = activeFilters.length > 0;
         data-server-search data-target="#deal-results"
       />
       {categorySlug && <input type="hidden" name="category" value={categorySlug} />}
+      {params.get('town') && <input type="hidden" name="town" value={params.get('town')} />}
       <button class="btn btn-primary" type="submit">Search</button>
     </form>
 
@@ -161,34 +188,30 @@ const filtersActive = activeFilters.length > 0;
     )}
 
     <div class="filters" id="categories" data-hide-on-search>
-      <div class="chip-row" role="list" aria-label="Filter by category">
-        <a class="chip" role="listitem" href={buildUrl({ category: null })}
+      <div class="chip-row" role="group" aria-label="Filter by category">
+        <a class="chip" href={buildUrl({ category: null })}
            aria-current={!categorySlug ? 'true' : undefined}>All</a>
         {usableCategories.map((c) => (
-          <a class="chip" role="listitem" href={buildUrl({ category: c.slug })}
+          <a class="chip" href={buildUrl({ category: c.slug })}
              aria-current={categorySlug === c.slug ? 'true' : undefined}>
             {c.name}<span class="chip-count">{c.deal_count}</span>
           </a>
         ))}
       </div>
 
-      <div class="chip-row" role="list" aria-label="Refine">
-        <a class="chip" role="listitem" href={buildUrl({ featured: featuredOnly ? null : '1' })}
+      <div class="chip-row" role="group" aria-label="Refine">
+        <a class="chip" href={buildUrl({ featured: featuredOnly ? null : '1' })}
            aria-current={featuredOnly ? 'true' : undefined}>Featured</a>
-        <a class="chip" role="listitem" href={buildUrl({ ending: endingSoon ? null : '1' })}
+        <a class="chip" href={buildUrl({ ending: endingSoon ? null : '1' })}
            aria-current={endingSoon ? 'true' : undefined}>Ending soon</a>
-        {/* Town only appears once there is more than one to choose between. */}
-        {towns.length > 1 && towns.map((t) => (
-          <a class="chip" role="listitem" href={buildUrl({ town: townSlug === t.slug ? null : t.slug })}
-             aria-current={townSlug === t.slug ? 'true' : undefined}>{t.name}</a>
-        ))}
+
       </div>
     </div>
 
     {results.items.length > 0 ? (
       <>
-        <div class="grid" id="deal-results">
-          {results.items.map((deal, i) => <DealCard deal={deal} priority={i < 3} />)}
+        <div class="grid biz-grid" id="deal-results">
+          {results.items.map((m, i) => <BusinessCard merchant={m} headingLevel="h2" priority={i < 2} showTown={!activeTown} />)}
         </div>
         <Pagination page={results.page} pageCount={results.pageCount} baseUrl={Astro.url} />
       </>
@@ -206,13 +229,12 @@ const filtersActive = activeFilters.length > 0;
           hours, phone and directions are still here.
         </p>
         <div class="grid">
-          {quietMerchants.map((m) => (
-            <MerchantCard merchant={m} note="No deals right now — check back soon" />
-          ))}
+          {quietMerchants.map((m) => <BusinessCard merchant={m} showTown={!activeTown} />)}
         </div>
       </section>
     )}
   </div>
+  )}
 </Base>
 
 <style>

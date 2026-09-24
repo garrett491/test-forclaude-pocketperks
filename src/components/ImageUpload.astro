@@ -1,7 +1,15 @@
 ---
-import { imageUrl } from '../lib/format';
+import MediaFrame from './MediaFrame.astro';
 import type { MediaAsset } from '../lib/types';
 
+/**
+ * Image upload with a live preview of how the image will actually look.
+ *
+ * Any shape is accepted and nothing is ever cropped — the site shows every
+ * image whole. The preview shows the two places it appears (a card, and the
+ * business's own page) so there are no surprises, and gentle warnings flag a
+ * very small or very oddly shaped image without blocking the upload.
+ */
 interface Props {
   /** Name of the hidden input carrying the media id back to the form. */
   name: string;
@@ -14,34 +22,39 @@ interface Props {
 }
 
 const { name, label, hint, current = null, maxEdge = 1200, aspect = 'wide' } = Astro.props;
-const previewSrc = current ? imageUrl(current, aspect === 'square' ? 200 : 480) : null;
+const kind = aspect === 'square' ? 'logo' : 'photo';
+const safeId = name.replace(/[^a-z0-9_-]/gi, '-');
 ---
 
-<div class="upload" data-upload data-max-edge={maxEdge}>
-  <span class="upload-label" id={`${name}-label`}>{label}</span>
+<div class="upload" data-upload data-max-edge={maxEdge} data-kind={kind}>
+  <span class="upload-label" id={`${safeId}-label`}>{label}</span>
 
   <input type="hidden" name={name} value={current?.id ?? ''} data-media-id />
 
-  <div class={`preview ${aspect}`} data-preview>
-    {previewSrc ? (
-      <img src={previewSrc} alt={current?.alt_text || ''} width="240" height={aspect === 'square' ? 240 : 150} />
-    ) : (
-      <span class="preview-empty">No image yet</span>
-    )}
+  <div class="previews" data-previews hidden={!current}>
+    <figure>
+      <div class="pv-card" data-preview-card>
+        <MediaFrame asset={current} mode="box" ratio={2} kind={kind} alt="" name={label} width={400} />
+      </div>
+      <figcaption>On a card</figcaption>
+    </figure>
+    <figure>
+      <div class="pv-page" data-preview-page>
+        <MediaFrame asset={current} mode={kind === 'logo' ? 'tile' : 'fit'} kind={kind} alt="" name={label} width={400} />
+      </div>
+      <figcaption>On their page</figcaption>
+    </figure>
   </div>
+  <p class="preview-empty" data-preview-empty hidden={!!current}>No image yet</p>
 
   <div class="upload-controls">
-    {/*
-      A real file input, labelled, keyboard reachable. Styled buttons that
-      hide the input behind a div are a common way to make uploads
-      unreachable by keyboard, so this stays a plain input.
-    */}
-    <label class="file-label" for={`${name}-file`}>
-      Choose image
+    {/* A real file input, labelled and keyboard reachable. */}
+    <label class="file-label" for={`${safeId}-file`}>
+      {current ? 'Replace image' : 'Choose image'}
       <input
-        class="file-input" id={`${name}-file`} type="file"
+        class="file-input" id={`${safeId}-file`} type="file"
         accept="image/jpeg,image/png,image/webp,image/avif"
-        data-file aria-describedby={`${name}-hint`}
+        data-file aria-describedby={`${safeId}-hint ${safeId}-status`}
       />
     </label>
     <button class="btn btn-ghost btn-sm danger-text" type="button" data-clear
@@ -49,40 +62,45 @@ const previewSrc = current ? imageUrl(current, aspect === 'square' ? 200 : 480) 
   </div>
 
   <div class="field alt-field">
-    <label for={`${name}-alt`}>Describe the image</label>
-    <input class="input" id={`${name}-alt`} name={`${name}_alt`} maxlength="200"
+    <label for={`${safeId}-alt`}>Describe the image</label>
+    <input class="input" id={`${safeId}-alt`} name={`${name}_alt`} maxlength="200"
            value={current?.alt_text ?? ''} data-alt
-           placeholder="Storefront on Canton Road" />
+           placeholder={kind === 'logo' ? 'Crossroads Pizza logo' : 'Storefront on Canton Road'} />
     <p class="hint">
-      For people using a screen reader, and shown if the image fails to load.
-      Describe what is in it, not that it is a photo.
+      Read aloud by screen readers. Describe what is in it. If it contains words
+      that matter — a price, a date — include them here.
     </p>
   </div>
 
-  <p class="hint" id={`${name}-hint`}>
-    {hint ?? 'JPEG, PNG or WebP. Large photos are shrunk automatically before uploading.'}
+  <p class="hint" id={`${safeId}-hint`}>
+    {hint ?? 'JPEG, PNG or WebP, any shape. Large photos are shrunk automatically before uploading.'}
   </p>
-  <p class="upload-status" role="status" aria-live="polite"></p>
+  <p class="upload-warning" data-warning hidden></p>
+  <p class="upload-status" id={`${safeId}-status`} role="status" aria-live="polite"></p>
 </div>
 
 <style>
   .upload { display: flex; flex-direction: column; gap: var(--pp-space-3); }
   .upload-label { font-size: var(--pp-text-sm); font-weight: 600; }
 
-  .preview {
-    border: 1px dashed var(--pp-line-strong);
-    border-radius: var(--pp-radius-inset);
-    background: var(--pp-paper);
-    display: grid; place-items: center;
-    overflow: hidden;
+  .previews { display: flex; gap: var(--pp-space-3); flex-wrap: wrap; align-items: flex-start; }
+  .previews[hidden] { display: none; }
+  .previews figure { margin: 0; display: flex; flex-direction: column; gap: var(--pp-space-1); }
+  .previews figcaption { font-size: var(--pp-text-xs); color: var(--pp-muted); }
+  .pv-card { width: 12rem; border: 1px solid var(--pp-line); border-radius: var(--pp-radius-inset); overflow: hidden; }
+  .pv-page { width: 12rem; border: 1px solid var(--pp-line); border-radius: var(--pp-radius-inset); overflow: hidden; padding: var(--pp-space-2); background: var(--pp-surface); }
+  .pv-page :global(.mf-fit) { --mf-max: 10rem; --mf-min: 4rem; }
+  .pv-page :global(.mf-tile) { --tile-h: 64px; --tile-max: 170px; }
+  .preview-empty {
+    margin: 0; padding: var(--pp-space-4); max-width: 20rem; text-align: center;
+    font-size: var(--pp-text-sm); color: var(--pp-muted);
+    border: 1px dashed var(--pp-line-strong); border-radius: var(--pp-radius-inset); background: var(--pp-paper);
   }
-  .preview.wide { aspect-ratio: 16 / 10; max-width: 20rem; }
-  .preview.square { width: 8rem; height: 8rem; }
-  .preview img { width: 100%; height: 100%; object-fit: contain; }
-  .preview-empty { font-size: var(--pp-text-sm); color: var(--pp-muted); }
+  .preview-empty[hidden] { display: none; }
 
   .upload-controls { display: flex; gap: var(--pp-space-2); align-items: center; flex-wrap: wrap; }
   .file-label {
+    position: relative;
     display: inline-flex; align-items: center;
     min-height: var(--pp-tap-min);
     padding: var(--pp-space-2) var(--pp-space-4);
@@ -97,10 +115,15 @@ const previewSrc = current ? imageUrl(current, aspect === 'square' ? 200 : 480) 
   .danger-text { color: var(--pp-danger); }
 
   .alt-field { max-width: 28rem; }
+  .upload-warning {
+    margin: 0; font-size: var(--pp-text-sm); max-width: 32rem;
+    padding: var(--pp-space-2) var(--pp-space-3);
+    background: #FBF1DC; color: #6B4E12; border-radius: var(--pp-radius-inset);
+  }
+  .upload-warning[hidden] { display: none; }
   .upload-status:empty { display: none; }
   .upload-status { font-size: var(--pp-text-sm); font-weight: 600; margin: 0; }
   .upload-status[data-state='error'] { color: var(--pp-danger); }
   .upload-status[data-state='ok'] { color: var(--pp-green); }
   .upload-status[data-state='busy'] { color: var(--pp-muted); }
 </style>
-

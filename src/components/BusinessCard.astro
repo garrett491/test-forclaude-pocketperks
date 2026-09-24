@@ -1,0 +1,115 @@
+---
+import type { Merchant } from '../lib/types';
+import MediaFrame from './MediaFrame.astro';
+import { cardDeals, moreDealsLabel } from '../lib/listing';
+import { expiryLabel, isEndingSoon, openStatus, truncate } from '../lib/format';
+
+/**
+ * The business card: who they are, and up to three of their live deals.
+ *
+ * One card per business. The best three deals show on the card; anything
+ * beyond that is counted ("+2 more deals"), so the card stays short and the
+ * rest is one tap away. The count comes from the data, never a constant.
+ *
+ * The whole card is one link to the business page — a single target, so a
+ * thumb can land anywhere on it, and keyboard and screen-reader users meet
+ * exactly one link per business instead of a cluster of them. The coupon
+ * lines are plain text inside it.
+ */
+interface Props {
+  merchant: Merchant;
+  priority?: boolean;
+  /** Show the town under the name. On for mixed-town lists. */
+  showTown?: boolean;
+  headingLevel?: 'h2' | 'h3';
+}
+const { merchant, priority = false, showTown = false, headingLevel = 'h3' } = Astro.props;
+
+const href = `/b/${merchant.slug}`;
+const { shown, more } = cardDeals(merchant.deals);
+const status = openStatus(merchant.hours);
+const Heading = headingLevel;
+
+/**
+ * The media band shows the cover photo, or the logo when there is no photo.
+ * The small logo tile beside the name appears only when the band is showing
+ * the photo, so a logo is never shown twice on one card.
+ */
+const band = merchant.cover ?? merchant.logo ?? null;
+const bandIsLogo = !merchant.cover && !!merchant.logo;
+const showTile = !bandIsLogo;
+
+const meta = [merchant.category?.name, showTown ? merchant.town?.name : null].filter(Boolean).join(' · ');
+
+/**
+ * Only badges the admin chose. An automatic "New" on every fresh coupon
+ * turned a card into a row of identical labels that said nothing; the
+ * expiry line already carries the one urgency that matters.
+ */
+function couponBadge(deal: (typeof shown)[number]) {
+  return deal.badge ? { label: deal.badge.label, style: deal.badge.style_key } : null;
+}
+---
+
+<article class="biz-card card" data-merchant-id={merchant.id}>
+  {band && merchant.is_featured && <span class="badge badge-deep biz-featured-band">Featured</span>}
+  {band && (
+    <MediaFrame
+      asset={band} mode="box" ratio={2} kind={bandIsLogo ? 'logo' : 'photo'}
+      alt={bandIsLogo ? '' : (band.alt_text || '')}
+      name={merchant.name} width={640} priority={priority}
+      sizes="(min-width: 75rem) 360px, (min-width: 48rem) 45vw, 94vw"
+      class="biz-band"
+    />
+  )}
+
+  <div class="biz-body">
+    <div class="biz-head">
+      {showTile && (
+        <MediaFrame asset={merchant.logo} mode="tile" kind="logo" alt="" name={merchant.name}
+                    width={160} class="biz-tile" />
+      )}
+      <div class="biz-id">
+        <Heading class="biz-name"><a href={href} class="stretch">{merchant.name}</a></Heading>
+        {meta && <p class="biz-meta">{meta}</p>}
+        {status && <p class:list={['biz-status', { 'is-open': status.isOpen }]}>{status.label}</p>}
+      </div>
+      {!band && merchant.is_featured && <span class="badge badge-deep biz-featured">Featured</span>}
+    </div>
+
+    {shown.length > 0 ? (
+      <ul class="coupons list-plain" aria-label={`Deals from ${merchant.name}`}>
+        {shown.map((deal) => {
+          const expiry = expiryLabel(deal);
+          const badge = couponBadge(deal);
+          const details = [deal.restrictions, deal.coupon_code ? `Code ${deal.coupon_code}` : null].filter(Boolean);
+          return (
+            <li class="coupon" data-track-impression data-deal-id={deal.id} data-merchant-id={merchant.id}>
+              <p class="coupon-headline">
+                {badge && <span class={`badge badge-${badge.style} coupon-badge`}>{badge.label}</span>}
+                {deal.headline}
+              </p>
+              {shown.length === 1 && deal.description && (
+                <p class="coupon-desc">{truncate(deal.description, 110)}</p>
+              )}
+              {(expiry || details.length > 0) && (
+                <p class="coupon-meta">
+                  {expiry && <span class:list={['coupon-expiry', { 'is-soon': isEndingSoon(deal) }]}>{expiry}</span>}
+                  {details.map((d) => <span>{d}</span>)}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    ) : (
+      <p class="biz-none">No deals running right now. Hours, phone and directions are on their page.</p>
+    )}
+
+    <p class="biz-cta" aria-hidden="true">
+      {more > 0 && <span class="biz-more">{moreDealsLabel(more)}</span>}
+      <span class="biz-see">{shown.length ? 'See all deals' : 'See details'} <span class="arrow">→</span></span>
+    </p>
+    {more > 0 && <span class="sr-only">{moreDealsLabel(more)} on their page.</span>}
+  </div>
+</article>

@@ -40,6 +40,7 @@
   --pp-line-strong:    #C7CAC1;
   --pp-muted:          #4E5D50;   /* 6.46:1 on paper — meta text     */
   --pp-muted-soft:     #5A6B5C;   /* 5.26:1 on paper — de-emphasis   */
+  --pp-frame:          #EFF0EC;   /* the space around a contained image */
 
   /* ---- Feedback ------------------------------------------------------
      One hue, two values. Red for errors and destructive confirmations is

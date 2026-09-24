@@ -21,16 +21,31 @@ export const GET: APIRoute = async ({ cookies, request }) => {
   const session = await requireAdmin(cookies, request);
   if (!session) return new Response('Not authorised', { status: 401 });
 
-  const { data, error } = await session.db
+  // Consent columns arrive with migration 0009; export without them before that.
+  let result: { data: any[] | null; error: { code?: string } | null } = await session.db
     .from('subscribers')
-    .select('email, status, source, created_at, confirmed_at')
+    .select('email, status, source, created_at, confirmed_at, unsubscribe_token, consent_text, consent_at')
     .order('created_at', { ascending: false });
+  if (result.error?.code === '42703' || result.error?.code === 'PGRST204') {
+    result = await session.db
+      .from('subscribers')
+      .select('email, status, source, created_at, confirmed_at, unsubscribe_token')
+      .order('created_at', { ascending: false });
+  }
+  const { data, error } = result;
 
   if (error) return new Response('Export failed', { status: 500 });
 
-  const header = ['Email', 'Status', 'Source', 'Signed up', 'Confirmed'];
+  // Each person's own unsubscribe link, ready to merge into the footer of
+  // any email sent from another tool. Every commercial email needs one.
+  const site = (import.meta.env.PUBLIC_SITE_URL ?? '').replace(/\/$/, '');
+  const header = ['Email', 'Status', 'Source', 'Signed up', 'Confirmed', 'Unsubscribe link', 'Consent wording', 'Consent given'];
   const rows = (data ?? []).map((s: any) =>
-    [s.email, s.status, s.source ?? '', s.created_at ?? '', s.confirmed_at ?? ''].map(csvCell).join(',')
+    [
+      s.email, s.status, s.source ?? '', s.created_at ?? '', s.confirmed_at ?? '',
+      s.unsubscribe_token ? `${site}/unsubscribe?t=${s.unsubscribe_token}` : '',
+      s.consent_text ?? '', s.consent_at ?? '',
+    ].map(csvCell).join(',')
   );
 
   const csv = [header.map(csvCell).join(','), ...rows].join('\r\n');

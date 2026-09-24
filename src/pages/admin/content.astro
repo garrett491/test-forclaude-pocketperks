@@ -1,6 +1,6 @@
 ---
 import Admin from '../../layouts/Admin.astro';
-import { str, bool, int, timestamp, toLocalInput, humanError } from '../../lib/admin';
+import { str, bool, int, timestamp, toLocalInput, writeFailure } from '../../lib/admin';
 
 export const prerender = false;
 
@@ -38,7 +38,7 @@ if (Astro.request.method === 'POST') {
       finalPayload = { steps };
     }
 
-    const { error: blockError } = await db
+    error = writeFailure(await db
       .from('content_blocks')
       .update({
         payload: finalPayload,
@@ -46,10 +46,9 @@ if (Astro.request.method === 'POST') {
         starts_at: timestamp(form, 'starts_at'),
         ends_at: timestamp(form, 'ends_at'),
       })
-      .eq('block_key', key);
-
-    if (blockError) error = humanError(blockError);
-    else success = 'Content saved.';
+      .eq('block_key', key)
+      .select('id'));
+    if (!error) success = 'Content saved. The site shows it straight away.';
   }
 
   if (intent === 'announcement') {
@@ -71,12 +70,14 @@ if (Astro.request.method === 'POST') {
       sort_order: 0,
     };
 
-    const { error: annError } = existing
-      ? await db.from('content_blocks').update(record).eq('id', existing.id)
-      : await db.from('content_blocks').insert(record);
-
-    if (annError) error = humanError(annError);
-    else success = active && text ? 'Announcement bar is live.' : 'Announcement bar is off.';
+    if (href && !/^\/[^\s]*$|^https:\/\/[^\s]+$/i.test(href)) {
+      error = 'The link must start with / (a page on this site) or https://';
+    } else {
+      error = writeFailure(existing
+        ? await db.from('content_blocks').update(record).eq('id', existing.id).select('id')
+        : await db.from('content_blocks').insert(record).select('id'));
+    }
+    if (!error) success = active && text ? 'Announcement bar is live.' : 'Announcement bar is off.';
   }
 
   if (intent === 'nav') {
@@ -84,35 +85,37 @@ if (Astro.request.method === 'POST') {
     const action = String(form.get('nav_action') ?? 'update');
 
     if (action === 'delete' && id) {
-      const { error: navError } = await db.from('nav_items').delete().eq('id', id);
       // System links raise a trigger error with a message written for a human.
-      if (navError) error = humanError(navError);
-      else success = 'Link removed.';
+      error = writeFailure(await db.from('nav_items').delete().eq('id', id).select('id'));
+      if (!error) success = 'Link removed.';
     } else if (action === 'create') {
       const label = str(form, 'label');
       const href = str(form, 'href');
       if (!label || !href) error = 'A link needs both a label and an address.';
       else {
-        const { error: navError } = await db.from('nav_items').insert({
-          location: String(form.get('location') ?? 'footer'),
+        const location = String(form.get('location') ?? 'footer');
+        error = writeFailure(await db.from('nav_items').insert({
+          location: location === 'header' ? 'header' : 'footer',
           section: str(form, 'section'),
           label, href,
           sort_order: int(form, 'sort_order', 50),
           opens_new_tab: bool(form, 'opens_new_tab'),
-        });
-        if (navError) error = humanError(navError);
-        else success = 'Link added.';
+        }).select('id'));
+        if (!error) success = 'Link added.';
       }
     } else if (id) {
-      const { error: navError } = await db.from('nav_items').update({
-        label: str(form, 'label'),
-        href: str(form, 'href'),
-        section: str(form, 'section'),
-        sort_order: int(form, 'sort_order'),
-        is_active: bool(form, 'is_active'),
-      }).eq('id', id);
-      if (navError) error = humanError(navError);
-      else success = 'Link saved.';
+      const label = str(form, 'label');
+      const href = str(form, 'href');
+      if (!label || !href) error = 'A link needs both a label and an address.';
+      else {
+        error = writeFailure(await db.from('nav_items').update({
+          label, href,
+          section: str(form, 'section'),
+          sort_order: int(form, 'sort_order'),
+          is_active: bool(form, 'is_active'),
+        }).eq('id', id).select('id'));
+        if (!error) success = 'Link saved.';
+      }
     }
   }
 }
@@ -127,6 +130,7 @@ const nav = (navRows ?? []) as any[];
 const byKey = (key: string) => blocks.find((b) => b.block_key === key);
 
 const hero = byKey('home.hero');
+const chooser = byKey('home.town_chooser');
 const how = byKey('home.how_it_works');
 const newsletter = byKey('home.newsletter');
 const announcement = byKey('site.announcement');
@@ -142,44 +146,68 @@ const steps = how?.payload?.steps ?? [];
 
   <p class="help">
     Everything on this page is wording that appears on the public site. Changes
-    show up within about five minutes — you do not need to redeploy anything.
+    show up as soon as you save — you do not need to redeploy anything.
   </p>
 
   <section class="panel">
-    <h2>Homepage hero</h2>
-    <p class="panel-hint">The first thing a visitor reads.</p>
+    <h2>Town chooser</h2>
+    <p class="panel-hint">
+      The first screen a new visitor sees when there is more than one town. They
+      pick a town, and it is remembered on their device.
+    </p>
+    <form method="post" class="stack">
+      <input type="hidden" name="intent" value="block" />
+      <input type="hidden" name="block_key" value="home.town_chooser" />
+      <input type="hidden" name="block_type" value="hero" />
+      <input type="hidden" name="is_active" value="on" />
+      {chooser ? (
+        <>
+          <div class="form-grid cols-2">
+            <div class="field span-2">
+              <label for="tc-headline">Question</label>
+              <input class="input" id="tc-headline" name="payload.headline" maxlength="80" value={p(chooser, 'headline')} />
+            </div>
+            <div class="field span-2">
+              <label for="tc-body">Line underneath</label>
+              <input class="input" id="tc-body" name="payload.body" maxlength="160" value={p(chooser, 'body')} />
+            </div>
+          </div>
+          <div class="form-actions"><button class="btn btn-primary" type="submit">Save town chooser</button></div>
+        </>
+      ) : (
+        <p class="hint">Run migration 0009 in Supabase to make this wording editable.</p>
+      )}
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Homepage heading</h2>
+    <p class="panel-hint">
+      The large heading and the line under it at the top of the homepage, once a
+      visitor has chosen their town. The small line above the town chooser uses
+      the heading too.
+    </p>
     <form method="post" class="stack">
       <input type="hidden" name="intent" value="block" />
       <input type="hidden" name="block_key" value="home.hero" />
       <input type="hidden" name="block_type" value="hero" />
+      {/* Stored values for fields no longer shown are carried through, so
+          saving here never erases them. */}
+      {['primary_cta_label', 'primary_cta_href', 'secondary_cta_label', 'secondary_cta_href'].map((k) => (
+        <input type="hidden" name={`payload.${k}`} value={p(hero, k)} />
+      ))}
       <div class="form-grid cols-2">
         <div class="field span-2">
-          <label for="hero-headline">Headline</label>
-          <input class="input" id="hero-headline" name="payload.headline" value={p(hero, 'headline')} />
+          <label for="hero-headline">Heading</label>
+          <input class="input" id="hero-headline" name="payload.headline" maxlength="90" value={p(hero, 'headline')} />
         </div>
         <div class="field span-2">
-          <label for="hero-sub">Subheadline</label>
-          <input class="input" id="hero-sub" name="payload.subheadline" value={p(hero, 'subheadline')} />
-        </div>
-        <div class="field">
-          <label for="hero-cta1">Main button text</label>
-          <input class="input" id="hero-cta1" name="payload.primary_cta_label" value={p(hero, 'primary_cta_label')} />
-        </div>
-        <div class="field">
-          <label for="hero-cta1h">Main button link</label>
-          <input class="input" id="hero-cta1h" name="payload.primary_cta_href" value={p(hero, 'primary_cta_href')} />
-        </div>
-        <div class="field">
-          <label for="hero-cta2">Second button text</label>
-          <input class="input" id="hero-cta2" name="payload.secondary_cta_label" value={p(hero, 'secondary_cta_label')} />
-        </div>
-        <div class="field">
-          <label for="hero-cta2h">Second button link</label>
-          <input class="input" id="hero-cta2h" name="payload.secondary_cta_href" value={p(hero, 'secondary_cta_href')} />
+          <label for="hero-sub">Line underneath</label>
+          <input class="input" id="hero-sub" name="payload.subheadline" maxlength="160" value={p(hero, 'subheadline')} />
         </div>
       </div>
       <input type="hidden" name="is_active" value="on" />
-      <div class="form-actions"><button class="btn btn-primary" type="submit">Save hero</button></div>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Save heading</button></div>
     </form>
   </section>
 
@@ -224,7 +252,7 @@ const steps = how?.payload?.steps ?? [];
 
   <section class="panel">
     <h2>How it works</h2>
-    <p class="panel-hint">Three steps on the homepage.</p>
+    <p class="panel-hint">Three steps near the bottom of the homepage and each town’s page.</p>
     <form method="post" class="stack">
       <input type="hidden" name="intent" value="block" />
       <input type="hidden" name="block_key" value="home.how_it_works" />

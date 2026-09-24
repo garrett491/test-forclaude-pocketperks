@@ -1,10 +1,14 @@
 ---
 import Base from '../layouts/Base.astro';
-import { getSiteChrome, listMerchants, CACHE_STATIC } from '../lib/queries';
+import { getSiteChrome, listMerchants } from '../lib/queries';
 import MerchantLeadForm from '../components/MerchantLeadForm.astro';
+import { cachePublic } from '../lib/http';
 
-Astro.response.headers.set('Cache-Control', CACHE_STATIC);
-const [{ settings }, merchants] = await Promise.all([getSiteChrome(), listMerchants({ pageSize: 1 })]);
+cachePublic(Astro);
+const { settings } = await getSiteChrome(Astro.locals);
+// A nice touch, not essential: if the count fails, the line is left out.
+let listedCount: number | null = null;
+try { listedCount = (await listMerchants({ pageSize: 1 })).total; } catch { listedCount = null; }
 const email = settings['contact.email'] as string | undefined;
 
 /**
@@ -36,8 +40,8 @@ const plans = [
     ], highlight: true },
   { name: 'Premium', price: '$119', per: 'per month', features: [
       'Everything in Pro',
-      'Featured badge on your deals',
-      'Placement in the homepage featured row',
+      'Featured badge on your business card',
+      'A place in the featured carousel on your town’s page',
       'Priority position in browsing',
       'Top placement in the weekly email',
     ], highlight: false },
@@ -113,7 +117,7 @@ const plans = [
     <section class="cta-foot" aria-labelledby="enquiry-title">
       <h2 id="enquiry-title">Want to be on it?</h2>
       <p>
-        {merchants.total} {merchants.total === 1 ? 'business is' : 'businesses are'} listed.
+        {listedCount ? `${listedCount} ${listedCount === 1 ? 'business is' : 'businesses are'} listed. ` : ''}
         Tell us about yours and we'll set the listing up for you — you don't have
         to build anything.
       </p>

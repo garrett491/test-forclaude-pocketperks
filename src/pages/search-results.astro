@@ -1,0 +1,46 @@
+---
+import BusinessCard from '../components/BusinessCard.astro';
+import { searchEverything, getTowns } from '../lib/queries';
+import { resolveTownContext, townFilter } from '../lib/location';
+import { logDataError } from '../lib/errors';
+import type { SearchResults } from '../lib/queries';
+
+/**
+ * Live search results for the /deals and /businesses search boxes, as an
+ * HTML fragment rendered by the same card component as the pages. Search
+ * results therefore cannot look or behave differently from the cards they
+ * replace, which is what happened when the browser rebuilt them by hand.
+ */
+export const partial = true;
+
+const query = (Astro.url.searchParams.get('q') ?? '').trim().slice(0, 80);
+let results: SearchResults = { cards: [], quiet: [], total: 0 };
+let failed = false;
+
+try {
+  const towns = await getTowns(Astro.locals);
+  // The same town rule as the page being searched, so typing never
+  // silently widens the results to every town.
+  const context = resolveTownContext(Astro.url, Astro.cookies, towns);
+  results = await searchEverything(query, townFilter(context));
+} catch (error) {
+  logDataError('live search', error);
+  failed = true;
+}
+
+Astro.response.status = failed ? 503 : 200;
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+Astro.response.headers.set('X-Result-Count', String(results.total));
+---
+
+{failed ? (
+  <p class="search-empty">Search is unavailable right now. Try again in a moment.</p>
+) : results.total === 0 ? (
+  <p class="search-empty">Nothing matches “{query}”. Try a business name, a town, or what you’re looking for.</p>
+) : (
+  <>
+    {results.cards.map((m) => <BusinessCard merchant={m} showTown={true} headingLevel="h2" />)}
+    {results.quiet.map((m) => <BusinessCard merchant={m} showTown={true} headingLevel="h2" />)}
+  </>
+)}

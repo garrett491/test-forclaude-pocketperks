@@ -82,9 +82,9 @@ const groups = selected
     <button class="btn btn-outline btn-sm" type="submit">Show</button>
   </form>
 
-  <div class="chip-row" role="list" aria-label="Quick date ranges">
+  <div class="chip-row" role="group" aria-label="Quick date ranges">
     {Object.keys(presets).map((key) => (
-      <a class="chip" role="listitem"
+      <a class="chip"
          href={`/admin/reports?range=${key}${merchantId ? `&merchant=${merchantId}` : ''}`}
          aria-current={rangeKey === key && !params.get('from') ? 'true' : undefined}>
         Last {key} days

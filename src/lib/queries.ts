@@ -1,6 +1,11 @@
-import { publicDb } from './supabase';
+import { publicDb, isConfigured } from './supabase';
+import { must, logDataError, DataUnavailableError } from './errors';
+import { memo } from './memo';
+import {
+  groupDealsByMerchant, compareDeals, compareMerchants, paginate, safeTerm, type Page,
+} from './listing';
 import type {
-  Merchant, Deal, Town, Category, NavItem, ContentBlock, SiteSettings,
+  Merchant, Deal, Town, Category, NavItem, ContentBlock, SiteSettings, GalleryItem, MerchantHours,
 } from './types';
 
 /**
@@ -8,157 +13,214 @@ import type {
  * Row Level Security. Draft merchants, paused deals and expired offers are
  * filtered by the database, not by conditions written here — so a query
  * someone forgets to guard still cannot leak unpublished content.
+ *
+ * Every query also checks its error. A failed query throws
+ * DataUnavailableError; it never pretends to be an empty result. Pages turn
+ * that into a friendly "try again" notice rather than a false "not found".
  */
 
-const MERCHANT_FIELDS = `
-  id, slug, name, tagline, description,
-  address_line1, address_line2, city, state_code, postal_code, latitude, longitude,
-  phone_display, phone_e164, website_url, facebook_url, instagram_url,
-  tier, is_featured, display_priority, seo_title, seo_description,
-  category_id, town_id,
-  created_at, published_at,
-  category:categories ( id, slug, name, icon_key, sort_order, seo_title, seo_description ),
-  town:towns ( id, slug, name, state_code, latitude, longitude, seo_title, seo_description ),
-  logo:media!merchants_logo_media_id_fkey ( id, bucket_id, storage_path, alt_text, width, height ),
-  cover:media!merchants_cover_media_id_fkey ( id, bucket_id, storage_path, alt_text, width, height )
-`;
+/* ------------------------------------------------------------------ */
+/* Field lists, with a fallback for databases missing migration 0009   */
+/* ------------------------------------------------------------------ */
 
-const DEAL_FIELDS = `
-  id, slug, headline, description, terms, deal_type, coupon_code,
-  starts_at, ends_at, is_featured, display_priority, created_at,
-  badge:badges ( id, slug, label, style_key ),
-  image:media!deals_image_media_id_fkey ( id, bucket_id, storage_path, alt_text, width, height )
-`;
+/**
+ * If this code is deployed before migration 0009 has been run, selecting the
+ * new columns would fail every query and take the whole site down. Instead
+ * the first query checks once which columns exist and uses the older field
+ * list until the migration is applied. The check repeats every few minutes,
+ * so running the migration takes effect without a redeploy.
+ */
+let schemaCheck: { current: boolean; checkedAt: number } | null = null;
+
+async function hasCurrentSchema(): Promise<boolean> {
+  const fresh = schemaCheck && (schemaCheck.current || Date.now() - schemaCheck.checkedAt < 5 * 60_000);
+  if (fresh) return schemaCheck!.current;
+  const { error } = await publicDb.from('deals').select('restrictions').limit(1);
+  if (error && error.code !== '42703' && error.code !== 'PGRST204') {
+    // A genuine outage, not a schema question. Do not cache the answer.
+    logDataError('schema check', error);
+    throw new DataUnavailableError('schema check', error);
+  }
+  const current = !error;
+  if (!current) {
+    console.warn('[pocket-perks] Migration 0009 has not been run. Running with reduced features until it is.');
+  }
+  schemaCheck = { current, checkedAt: Date.now() };
+  return current;
+}
+
+const MEDIA_BASE = 'id, bucket_id, storage_path, alt_text, width, height';
+
+function fields(current: boolean) {
+  const media = current ? `${MEDIA_BASE}, variants` : MEDIA_BASE;
+  const merchant = `
+    id, slug, name, tagline, description,
+    address_line1, address_line2, city, state_code, postal_code, latitude, longitude,
+    phone_display, phone_e164, website_url, facebook_url, instagram_url,
+    tier, is_featured, display_priority, seo_title, seo_description,
+    category_id, town_id, created_at, published_at,
+    ${current ? 'show_in_carousel,' : ''}
+    category:categories ( id, slug, name, icon_key, sort_order, seo_title, seo_description ),
+    town:towns ( id, slug, name, state_code, latitude, longitude, seo_title, seo_description ),
+    logo:media!merchants_logo_media_id_fkey ( ${media} ),
+    cover:media!merchants_cover_media_id_fkey ( ${media} )`;
+  const deal = `
+    id, slug, headline, description, terms, deal_type, coupon_code, merchant_id,
+    starts_at, ends_at, is_featured, display_priority, created_at,
+    ${current ? 'restrictions,' : ''}
+    badge:badges ( id, slug, label, style_key ),
+    image:media!deals_image_media_id_fkey ( ${media} )`;
+  return { media, merchant, deal };
+}
+
+async function F() {
+  if (!isConfigured) throw new DataUnavailableError('configuration', { message: 'Supabase is not configured' });
+  return fields(await hasCurrentSchema());
+}
 
 export const PAGE_SIZE = 24;
-
-export interface DealFilters {
-  townSlug?: string;
-  categorySlug?: string;
-  merchantSlug?: string;
-  query?: string;
-  featuredOnly?: boolean;
-  endingSoon?: boolean;
-  page?: number;
-  pageSize?: number;
-}
-
-export interface Paged<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-  pageCount: number;
-}
-
-/** Strips characters PostgREST treats as filter syntax. */
-function safeTerm(input: string): string {
-  return input.trim().replace(/[,()%*\\]/g, ' ').slice(0, 80);
-}
 
 /* ------------------------------------------------------------------ */
 /* Slug resolution                                                     */
 /*                                                                     */
 /* Filters resolve a slug to an id first, then filter on the foreign    */
-/* key column. Filtering on a nested embedded column                    */
-/* (merchant.category.slug) silently does nothing unless every level of */
-/* the embed is marked !inner — which is exactly why the category and   */
-/* town filters were returning every record regardless of what was      */
-/* selected. A plain column filter cannot fail that way, and it uses    */
-/* the indexes created in migration 0002.                               */
+/* key column. Filtering on a nested embedded column silently does      */
+/* nothing unless every level of the embed is !inner; a plain column    */
+/* filter cannot fail that way, and it uses the indexes.                */
 /* ------------------------------------------------------------------ */
 
 async function categoryIdForSlug(slug?: string): Promise<string | null> {
   if (!slug) return null;
-  const { data } = await publicDb.from('categories').select('id').eq('slug', slug).maybeSingle();
-  return data?.id ?? null;
+  const data = must('category lookup',
+    await publicDb.from('categories').select('id').eq('slug', slug).maybeSingle());
+  return (data as { id: string } | null)?.id ?? null;
 }
 
 async function townIdForSlug(slug?: string): Promise<string | null> {
   if (!slug) return null;
-  const { data } = await publicDb.from('towns').select('id').eq('slug', slug).maybeSingle();
-  return data?.id ?? null;
+  const data = must('town lookup',
+    await publicDb.from('towns').select('id').eq('slug', slug).maybeSingle());
+  return (data as { id: string } | null)?.id ?? null;
 }
 
 /* ------------------------------------------------------------------ */
 /* Site chrome                                                         */
 /* ------------------------------------------------------------------ */
 
-export async function getSiteChrome(): Promise<{
+export interface SiteChrome {
   settings: SiteSettings;
   nav: NavItem[];
   blocks: Record<string, ContentBlock>;
-}> {
-  const [settingsRes, navRes, blocksRes] = await Promise.all([
-    publicDb.from('site_settings').select('key, value'),
-    publicDb.from('nav_items').select('location, section, label, href, opens_new_tab, sort_order')
-      .order('sort_order'),
-    publicDb.from('content_blocks').select('block_key, block_type, title, payload, sort_order')
-      .order('sort_order'),
-  ]);
-
-  const settings: SiteSettings = {};
-  for (const row of settingsRes.data ?? []) settings[row.key] = row.value;
-
-  const blocks: Record<string, ContentBlock> = {};
-  for (const b of (blocksRes.data ?? []) as ContentBlock[]) blocks[b.block_key] = b;
-
-  return { settings, nav: (navRes.data ?? []) as NavItem[], blocks };
-}
-
-export async function getTowns(): Promise<Town[]> {
-  const { data } = await publicDb
-    .from('towns')
-    .select('id, slug, name, state_code, latitude, longitude, seo_title, seo_description')
-    .order('sort_order');
-  return (data ?? []) as Town[];
-}
-
-export async function getTown(slug: string): Promise<Town | null> {
-  const { data } = await publicDb
-    .from('towns')
-    .select('id, slug, name, state_code, latitude, longitude, seo_title, seo_description')
-    .eq('slug', slug)
-    .maybeSingle();
-  return (data as Town) ?? null;
+  /** False when the database could not be reached and defaults are showing. */
+  ok: boolean;
 }
 
 /**
- * Categories with a live deal count.
+ * Settings, navigation and editable copy.
  *
- * The count matters: a category chip that leads to an empty page is a
- * broken promise, and with five merchants most categories are empty. The
- * UI hides zero-count categories rather than letting someone tap into
- * nothing.
+ * Never throws. If the database is down the header, footer and error notice
+ * still render from built-in defaults, so a visitor always gets a working
+ * page with a way forward instead of a blank screen.
+ */
+export function getSiteChrome(locals?: App.Locals): Promise<SiteChrome> {
+  return memo(locals, 'chrome', async () => {
+    try {
+      if (!isConfigured) throw new Error('not configured');
+      const [settingsRes, navRes, blocksRes] = await Promise.all([
+        publicDb.from('site_settings').select('key, value'),
+        publicDb.from('nav_items').select('location, section, label, href, opens_new_tab, sort_order').order('sort_order'),
+        publicDb.from('content_blocks').select('block_key, block_type, title, payload, sort_order').order('sort_order'),
+      ]);
+      const settingsRows = must('site settings', settingsRes) as { key: string; value: unknown }[];
+      const navRows = must('navigation', navRes) as NavItem[];
+      const blockRows = must('content blocks', blocksRes) as ContentBlock[];
+
+      const settings: SiteSettings = {};
+      for (const row of settingsRows ?? []) settings[row.key] = row.value;
+      const blocks: Record<string, ContentBlock> = {};
+      for (const b of blockRows ?? []) blocks[b.block_key] = b;
+      return { settings, nav: navRows ?? [], blocks, ok: true };
+    } catch {
+      return { settings: {}, nav: DEFAULT_NAV, blocks: {}, ok: false };
+    }
+  });
+}
+
+/** What the header and footer show when the database cannot be reached. */
+const DEFAULT_NAV: NavItem[] = [
+  { location: 'header', section: null, label: 'Deals', href: '/deals', opens_new_tab: false, sort_order: 10 },
+  { location: 'header', section: null, label: 'Businesses', href: '/businesses', opens_new_tab: false, sort_order: 20 },
+  { location: 'footer', section: 'About', label: 'Privacy', href: '/privacy', opens_new_tab: false, sort_order: 10 },
+  { location: 'footer', section: 'About', label: 'Terms of use', href: '/terms', opens_new_tab: false, sort_order: 15 },
+  { location: 'footer', section: 'About', label: 'Accessibility', href: '/accessibility', opens_new_tab: false, sort_order: 18 },
+];
+
+const TOWN_FIELDS = 'id, slug, name, state_code, latitude, longitude, seo_title, seo_description';
+
+export function getTowns(locals?: App.Locals): Promise<Town[]> {
+  return memo(locals, 'towns', async () => {
+    if (!isConfigured) throw new DataUnavailableError('configuration', { message: 'not configured' });
+    return (must('towns', await publicDb.from('towns').select(TOWN_FIELDS).order('sort_order')) ?? []) as Town[];
+  });
+}
+
+/** For the layout: an empty list rather than an error, so chrome always renders. */
+export async function getTownsSafe(locals?: App.Locals): Promise<Town[]> {
+  try { return await getTowns(locals); } catch { return []; }
+}
+
+export async function getTown(slug: string, locals?: App.Locals): Promise<Town | null> {
+  const towns = await getTowns(locals);
+  return towns.find((t) => t.slug === slug) ?? null;
+}
+
+/** Live deals per town id, for the first-visit town chooser. */
+export async function getTownDealCounts(): Promise<Map<string, number>> {
+  const data = must('town deal counts',
+    await publicDb.from('deals').select('id, merchant:merchants!inner ( town_id )'));
+  const counts = new Map<string, number>();
+  for (const row of (data ?? []) as any[]) {
+    const id = row.merchant?.town_id;
+    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Categories with a live deal count, for the filter chips.
+ *
+ * A chip that leads to an empty page is a broken promise, so pages hide
+ * zero-count categories.
  */
 export async function getCategoriesWithCounts(
   townSlug?: string
 ): Promise<Array<Category & { deal_count: number; merchant_count: number }>> {
+  const townId = await townIdForSlug(townSlug);
+  if (townSlug && !townId) return [];
+
+  let dealsQuery = publicDb.from('deals').select('id, merchant:merchants!inner ( category_id, town_id )');
+  if (townId) dealsQuery = dealsQuery.eq('merchant.town_id', townId);
+  let merchantsQuery = publicDb.from('merchants').select('id, category_id');
+  if (townId) merchantsQuery = merchantsQuery.eq('town_id', townId);
+
   const [catsRes, dealsRes, merchantsRes] = await Promise.all([
-    publicDb.from('categories')
-      .select('id, slug, name, icon_key, sort_order, seo_title, seo_description')
-      .order('sort_order'),
-    publicDb.from('deals')
-      .select('id, merchant:merchants!inner ( category_id, town:towns ( slug ) )'),
-    publicDb.from('merchants')
-      .select('id, category_id, town:towns ( slug )'),
+    publicDb.from('categories').select('id, slug, name, icon_key, sort_order, seo_title, seo_description').order('sort_order'),
+    dealsQuery,
+    merchantsQuery,
   ]);
+  const cats = (must('categories', catsRes) ?? []) as Category[];
+  const deals = (must('category deal counts', dealsRes) ?? []) as any[];
+  const merchants = (must('category merchant counts', merchantsRes) ?? []) as any[];
 
   const dealCounts = new Map<string, number>();
-  for (const row of (dealsRes.data ?? []) as any[]) {
-    const merchant = row.merchant;
-    if (!merchant) continue;
-    if (townSlug && merchant.town?.slug !== townSlug) continue;
-    dealCounts.set(merchant.category_id, (dealCounts.get(merchant.category_id) ?? 0) + 1);
+  for (const row of deals) {
+    const id = row.merchant?.category_id;
+    if (id) dealCounts.set(id, (dealCounts.get(id) ?? 0) + 1);
   }
-
   const merchantCounts = new Map<string, number>();
-  for (const row of (merchantsRes.data ?? []) as any[]) {
-    if (townSlug && row.town?.slug !== townSlug) continue;
-    merchantCounts.set(row.category_id, (merchantCounts.get(row.category_id) ?? 0) + 1);
-  }
+  for (const row of merchants) merchantCounts.set(row.category_id, (merchantCounts.get(row.category_id) ?? 0) + 1);
 
-  return ((catsRes.data ?? []) as Category[]).map((c) => ({
+  return cats.map((c) => ({
     ...c,
     deal_count: dealCounts.get(c.id) ?? 0,
     merchant_count: merchantCounts.get(c.id) ?? 0,
@@ -166,121 +228,70 @@ export async function getCategoriesWithCounts(
 }
 
 /* ------------------------------------------------------------------ */
-/* Deals                                                               */
+/* Deals and business cards                                            */
 /* ------------------------------------------------------------------ */
 
-export async function listDeals(filters: DealFilters = {}): Promise<Paged<Deal>> {
-  const page = Math.max(1, filters.page ?? 1);
-  const pageSize = filters.pageSize ?? PAGE_SIZE;
-  const from = (page - 1) * pageSize;
+export interface ListingFilters {
+  townSlug?: string;
+  categorySlug?: string;
+  query?: string;
+  featuredOnly?: boolean;
+  endingSoon?: boolean;
+  page?: number;
+  pageSize?: number;
+}
 
+/** Every live deal matching the filters, each carrying its merchant. */
+export async function listLiveDeals(filters: ListingFilters = {}, limit = 500): Promise<Deal[]> {
+  const f = await F();
   const [categoryId, townId] = await Promise.all([
     categoryIdForSlug(filters.categorySlug),
     townIdForSlug(filters.townSlug),
   ]);
 
   // A slug that matches nothing must return nothing, not everything.
-  if ((filters.categorySlug && !categoryId) || (filters.townSlug && !townId)) {
-    return { items: [], total: 0, page, pageSize, pageCount: 1 };
-  }
+  if ((filters.categorySlug && !categoryId) || (filters.townSlug && !townId)) return [];
 
-  let q = publicDb
-    .from('deals')
-    .select(`${DEAL_FIELDS}, merchant:merchants!inner ( ${MERCHANT_FIELDS} )`, { count: 'exact' });
-
+  let q = publicDb.from('deals').select(`${f.deal}, merchant:merchants!inner ( ${f.merchant} )`);
   if (townId) q = q.eq('merchant.town_id', townId);
   if (categoryId) q = q.eq('merchant.category_id', categoryId);
-  if (filters.merchantSlug) q = q.eq('merchant.slug', filters.merchantSlug);
   if (filters.featuredOnly) q = q.eq('is_featured', true);
-
   if (filters.endingSoon) {
     const soon = new Date(Date.now() + 7 * 86_400_000).toISOString();
     q = q.not('ends_at', 'is', null).lte('ends_at', soon);
   }
-
   if (filters.query?.trim()) {
     const term = safeTerm(filters.query);
     if (term) q = q.or(`headline.ilike.%${term}%,description.ilike.%${term}%`);
   }
 
-  const { data, count, error } = await q
+  const data = must('deal list', await q
     .order('is_featured', { ascending: false })
     .order('display_priority', { ascending: false })
     .order('created_at', { ascending: false })
-    .range(from, from + pageSize - 1);
-
-  if (error) throw error;
-
-  return {
-    items: (data ?? []) as unknown as Deal[],
-    total: count ?? 0,
-    page,
-    pageSize,
-    pageCount: Math.max(1, Math.ceil((count ?? 0) / pageSize)),
-  };
+    .limit(limit));
+  return (data ?? []) as unknown as Deal[];
 }
 
 /**
- * One deal per business, for the feed.
+ * One card per business, each holding all of its live deals.
  *
- * A Premium merchant running three deals used to occupy three cards while a
- * Standard merchant with one occupied a single card — three times the feed
- * for a plan that does not sell three times the exposure. At ten businesses
- * that is thirty cards to scroll past, and at fifty it is unusable.
- *
- * Now everyone gets one slot showing their strongest offer, with a link to
- * the rest. Tier decides position rather than volume, which is what the
- * plans actually sell.
+ * The card shows the best three and says how many more there are, so a
+ * business's offers are one tap away without taking over the feed.
  */
-const TIER_RANK: Record<string, number> = { premium: 3, pro: 2, standard: 1 };
-
-export async function listDealsGrouped(filters: DealFilters = {}): Promise<Paged<Deal>> {
-  const page = Math.max(1, filters.page ?? 1);
-  const pageSize = filters.pageSize ?? PAGE_SIZE;
-
-  // Fetch wide, then collapse. The alternative is a lateral join PostgREST
-  // cannot express, and at this scale one query is cheaper than the round
-  // trips a per-merchant query would cost.
-  const all = await listDeals({ ...filters, page: 1, pageSize: 500 });
-
-  const best = new Map<string, Deal>();
-  const counts = new Map<string, number>();
-
-  for (const deal of all.items) {
-    const id = deal.merchant?.id;
-    if (!id) continue;
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-    if (!best.has(id)) best.set(id, deal);
-  }
-
-  const collapsed = [...best.values()]
-    .map((deal) => ({ ...deal, sibling_count: (counts.get(deal.merchant!.id) ?? 1) - 1 }))
-    .sort((a, b) => {
-      const tier = (TIER_RANK[b.merchant?.tier ?? 'standard'] ?? 1)
-                 - (TIER_RANK[a.merchant?.tier ?? 'standard'] ?? 1);
-      if (tier !== 0) return tier;
-      return Number(b.is_featured) - Number(a.is_featured)
-        || b.display_priority - a.display_priority
-        || +new Date(b.created_at) - +new Date(a.created_at);
-    });
-
-  const from = (page - 1) * pageSize;
-  return {
-    items: collapsed.slice(from, from + pageSize),
-    total: collapsed.length,
-    page,
-    pageSize,
-    pageCount: Math.max(1, Math.ceil(collapsed.length / pageSize)),
-  };
+export async function listBusinessCards(filters: ListingFilters = {}): Promise<Page<Merchant>> {
+  const deals = await listLiveDeals(filters);
+  return paginate(groupDealsByMerchant(deals), filters.page ?? 1, filters.pageSize ?? PAGE_SIZE);
 }
 
 export async function getDeal(merchantSlug: string, dealSlug: string): Promise<Deal | null> {
-  const { data } = await publicDb
+  const f = await F();
+  const data = must('deal', await publicDb
     .from('deals')
-    .select(`${DEAL_FIELDS}, merchant:merchants!inner ( ${MERCHANT_FIELDS} )`)
+    .select(`${f.deal}, merchant:merchants!inner ( ${f.merchant} )`)
     .eq('merchant.slug', merchantSlug)
     .eq('slug', dealSlug)
-    .maybeSingle();
+    .maybeSingle());
   return (data as unknown as Deal) ?? null;
 }
 
@@ -288,255 +299,188 @@ export async function getDeal(merchantSlug: string, dealSlug: string): Promise<D
 /* Merchants                                                           */
 /* ------------------------------------------------------------------ */
 
-/** Live deal counts for a set of merchants, for the "see all N deals" band. */
-export async function liveDealCounts(merchantIds: string[]): Promise<Map<string, number>> {
-  const counts = new Map<string, number>();
-  if (!merchantIds.length) return counts;
-  const { data } = await publicDb.from('deals').select('merchant_id').in('merchant_id', merchantIds);
-  for (const row of (data ?? []) as any[]) {
-    counts.set(row.merchant_id, (counts.get(row.merchant_id) ?? 0) + 1);
+/** Attaches each merchant's live deals, best first, in one query. */
+export async function attachLiveDeals(merchants: Merchant[]): Promise<Merchant[]> {
+  if (!merchants.length) return merchants;
+  const f = await F();
+  const data = must('live deals for businesses', await publicDb
+    .from('deals')
+    .select(f.deal)
+    .in('merchant_id', merchants.map((m) => m.id)));
+  const byMerchant = new Map<string, Deal[]>();
+  for (const deal of (data ?? []) as unknown as Deal[]) {
+    const key = deal.merchant_id!;
+    if (!byMerchant.has(key)) byMerchant.set(key, []);
+    byMerchant.get(key)!.push(deal);
   }
-  return counts;
+  for (const m of merchants) m.deals = (byMerchant.get(m.id) ?? []).sort(compareDeals);
+  return merchants;
 }
 
-export async function listMerchants(filters: {
-  townSlug?: string;
-  categorySlug?: string;
-  query?: string;
-  page?: number;
-  pageSize?: number;
-} = {}): Promise<Paged<Merchant>> {
-  const page = Math.max(1, filters.page ?? 1);
-  const pageSize = filters.pageSize ?? PAGE_SIZE;
-  const from = (page - 1) * pageSize;
-
+export async function listMerchants(filters: ListingFilters = {}): Promise<Page<Merchant>> {
+  const f = await F();
   const [categoryId, townId] = await Promise.all([
     categoryIdForSlug(filters.categorySlug),
     townIdForSlug(filters.townSlug),
   ]);
-
+  const page = Math.max(1, filters.page ?? 1);
+  const pageSize = filters.pageSize ?? PAGE_SIZE;
   if ((filters.categorySlug && !categoryId) || (filters.townSlug && !townId)) {
     return { items: [], total: 0, page, pageSize, pageCount: 1 };
   }
 
-  let q = publicDb.from('merchants').select(MERCHANT_FIELDS, { count: 'exact' });
-
+  let q = publicDb.from('merchants').select(f.merchant, { count: 'exact' });
   if (townId) q = q.eq('town_id', townId);
   if (categoryId) q = q.eq('category_id', categoryId);
   if (filters.query?.trim()) {
     const term = safeTerm(filters.query);
     if (term) q = q.or(`name.ilike.%${term}%,tagline.ilike.%${term}%`);
   }
-
-  const { data, count, error } = await q
+  const from = (page - 1) * pageSize;
+  const result = await q
     .order('is_featured', { ascending: false })
     .order('display_priority', { ascending: false })
     .order('name')
     .range(from, from + pageSize - 1);
-
-  if (error) throw error;
-
-  // Attach live deal counts so every business card can say how much is
-  // waiting behind it.
-  const items = (data ?? []) as unknown as Merchant[];
-  const counts = await liveDealCounts(items.map((m) => m.id));
-  for (const merchant of items) {
-    merchant.deals = Array.from({ length: counts.get(merchant.id) ?? 0 }, () => ({} as any));
-  }
-
-  return {
-    items,
-    total: count ?? 0,
-    page,
-    pageSize,
-    pageCount: Math.max(1, Math.ceil((count ?? 0) / pageSize)),
-  };
+  const items = (must('business list', result) ?? []) as unknown as Merchant[];
+  await attachLiveDeals(items);
+  const total = result.count ?? items.length;
+  return { items, total, page, pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
 }
 
+/**
+ * One business, for its page.
+ *
+ * The business row is fetched on its own and is the only part that decides
+ * whether the page exists. Hours, photos and deals load alongside it, and
+ * the optional parts — hours and photos — can fail without taking the page
+ * down with them. Previously everything was one embedded query whose error
+ * was ignored, so any problem in any part (such as the photo gallery table
+ * not existing yet) made every business page look like it did not exist.
+ */
 export async function getMerchant(slug: string): Promise<Merchant | null> {
-  const { data } = await publicDb
-    .from('merchants')
-    .select(`${MERCHANT_FIELDS},
-      hours:merchant_hours ( day_of_week, is_closed, opens_at, closes_at ),
-      gallery:merchant_gallery ( id, caption, sort_order,
-        media:media ( id, bucket_id, storage_path, alt_text, width, height ) ),
-      deals ( ${DEAL_FIELDS} )`)
-    .eq('slug', slug)
-    .maybeSingle();
-
+  const f = await F();
+  const data = must('business', await publicDb.from('merchants').select(f.merchant).eq('slug', slug).maybeSingle());
   if (!data) return null;
   const merchant = data as unknown as Merchant;
-  merchant.gallery = (merchant.gallery ?? [])
-    .filter((g) => !!g.media)
-    .sort((a, b) => a.sort_order - b.sort_order);
-  merchant.deals = (merchant.deals ?? []).sort(
-    (a, b) =>
-      Number(b.is_featured) - Number(a.is_featured) ||
-      b.display_priority - a.display_priority ||
-      +new Date(b.created_at) - +new Date(a.created_at)
-  );
+
+  const [hoursRes, galleryRes, dealsRes] = await Promise.all([
+    publicDb.from('merchant_hours').select('day_of_week, is_closed, opens_at, closes_at').eq('merchant_id', merchant.id),
+    publicDb.from('merchant_gallery')
+      .select(`id, caption, sort_order, media:media ( ${f.media} )`)
+      .eq('merchant_id', merchant.id)
+      .order('sort_order'),
+    publicDb.from('deals').select(f.deal).eq('merchant_id', merchant.id),
+  ]);
+
+  if (hoursRes.error) logDataError('business hours', hoursRes.error);
+  if (galleryRes.error) logDataError('business gallery', galleryRes.error);
+
+  merchant.hours = (hoursRes.data ?? []) as MerchantHours[];
+  merchant.gallery = ((galleryRes.data ?? []) as unknown as GalleryItem[]).filter((g) => !!g.media);
+  merchant.deals = ((must('business deals', dealsRes) ?? []) as unknown as Deal[]).sort(compareDeals);
   return merchant;
 }
 
 /* ------------------------------------------------------------------ */
-/* Carousel — a Premium entitlement                                    */
+/* Featured carousel                                                   */
 /* ------------------------------------------------------------------ */
 
 /**
- * Deals shown in the rotating carousel.
+ * Businesses in the featured carousel for one town (or every town).
  *
- * Premium merchants only, and scoped to one town: the carousel is a
- * placement sold per market, so a Premium business in Carrollton does not
- * appear on another town's page.
- *
- * One slide per merchant, so a Premium business running three deals cannot
- * crowd out another Premium business paying exactly the same amount. And a
- * merchant with no live deal is skipped — a slide with nothing to claim
- * wastes the most valuable strip on the page, for the visitor and for the
- * merchant who bought it.
+ * Chosen per business in admin with "Show in featured carousel". On a
+ * database without migration 0009 it falls back to the old rule: every
+ * Premium business. Each slide is a business, never a single deal, and it
+ * links to the business page.
  */
-export async function getCarouselDeals(townSlug?: string, limit = 8): Promise<Deal[]> {
+export async function getCarouselMerchants(townSlug?: string, limit = 12): Promise<Merchant[]> {
+  const f = await F();
+  const current = f.merchant.includes('show_in_carousel');
   const townId = await townIdForSlug(townSlug);
   if (townSlug && !townId) return [];
 
-  let q = publicDb
-    .from('deals')
-    .select(`${DEAL_FIELDS}, merchant:merchants!inner ( ${MERCHANT_FIELDS} )`)
-    .eq('merchant.tier', 'premium');
-
-  if (townId) q = q.eq('merchant.town_id', townId);
-
-  const { data, error } = await q
-    .order('is_featured', { ascending: false })
+  let q = publicDb.from('merchants').select(f.merchant);
+  q = current ? q.eq('show_in_carousel', true) : q.eq('tier', 'premium');
+  if (townId) q = q.eq('town_id', townId);
+  const data = must('carousel', await q
     .order('display_priority', { ascending: false })
-    .order('created_at', { ascending: false })
-    .limit(limit * 3);
-
-  if (error) return [];
-
-  const rows = (data ?? []) as unknown as Deal[];
-
-  // How many other live offers each business has, so the slide can say so.
-  // A carousel showing one deal per business without mentioning the rest
-  // hides most of what a Premium merchant is paying to display.
-  const counts = new Map<string, number>();
-  for (const deal of rows) {
-    const id = deal.merchant?.id;
-    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-
-  const seen = new Set<string>();
-  const slides: Deal[] = [];
-  for (const deal of rows) {
-    const merchantId = deal.merchant?.id;
-    if (!merchantId || seen.has(merchantId)) continue;
-    seen.add(merchantId);
-    slides.push({ ...deal, sibling_count: (counts.get(merchantId) ?? 1) - 1 });
-    if (slides.length >= limit) break;
-  }
-  return slides;
+    .order('name')
+    .limit(limit));
+  const merchants = ((data ?? []) as unknown as Merchant[]).sort(compareMerchants);
+  return attachLiveDeals(merchants);
 }
 
-/**
- * Businesses on Pocket Perks with nothing running right now.
- *
- * Shown at the bottom of the deals page, clearly marked, so someone looking
- * for a particular business still finds them and can call or get directions.
- * They never mix in with live offers — a "nothing right now" card outranking
- * a real deal would be the wrong trade for everyone.
- */
+/** Businesses with nothing live right now, shown after those with deals. */
 export async function listMerchantsWithoutLiveDeals(filters: {
   townSlug?: string;
   categorySlug?: string;
   limit?: number;
 } = {}): Promise<Merchant[]> {
+  const f = await F();
   const [categoryId, townId] = await Promise.all([
     categoryIdForSlug(filters.categorySlug),
     townIdForSlug(filters.townSlug),
   ]);
-
   if ((filters.categorySlug && !categoryId) || (filters.townSlug && !townId)) return [];
 
-  let q = publicDb.from('merchants').select(`${MERCHANT_FIELDS}, deals ( id )`);
+  let q = publicDb.from('merchants').select(`${f.merchant}, deals ( id )`);
   if (townId) q = q.eq('town_id', townId);
   if (categoryId) q = q.eq('category_id', categoryId);
-
-  const { data, error } = await q.order('name');
-  if (error) return [];
-
+  const data = must('businesses without deals', await q.order('name'));
   return ((data ?? []) as unknown as Merchant[])
     .filter((m) => (m.deals?.length ?? 0) === 0)
+    .map((m) => ({ ...m, deals: [] }))
     .slice(0, filters.limit ?? 12);
 }
 
 /**
- * Other businesses to show on a merchant page.
- *
- * Placement here is a Pro and Premium entitlement, so only Pro and Premium
- * merchants are eligible to appear. Same category first, then anything else
- * in town, so the suggestion is at least plausibly relevant.
+ * Other businesses to show on a merchant page. Pro and Premium only (a
+ * plan entitlement); same category first, then anything else in town.
  */
-export async function getRelatedMerchants(
-  merchant: Merchant,
-  limit = 3
-): Promise<Merchant[]> {
-  let q = publicDb
-    .from('merchants')
-    .select(MERCHANT_FIELDS)
-    .in('tier', ['pro', 'premium'])
-    .neq('id', merchant.id);
-
+export async function getRelatedMerchants(merchant: Merchant, limit = 3): Promise<Merchant[]> {
+  const f = await F();
+  let q = publicDb.from('merchants').select(f.merchant).in('tier', ['pro', 'premium']).neq('id', merchant.id);
   if (merchant.town_id) q = q.eq('town_id', merchant.town_id);
-
-  const { data } = await q
+  const data = must('related businesses', await q
     .order('is_featured', { ascending: false })
     .order('display_priority', { ascending: false })
-    .limit(limit * 3);
-
+    .limit(limit * 3));
   const all = (data ?? []) as unknown as Merchant[];
-  const sameCategory = all.filter((m) => m.category?.id === merchant.category?.id);
-  const rest = all.filter((m) => m.category?.id !== merchant.category?.id);
-  return [...sameCategory, ...rest].slice(0, limit);
+  const sameCategory = all.filter((m) => m.category_id === merchant.category_id);
+  const rest = all.filter((m) => m.category_id !== merchant.category_id);
+  return attachLiveDeals([...sameCategory, ...rest].slice(0, limit));
 }
 
 /* ------------------------------------------------------------------ */
-/* Homepage composition                                                */
+/* A town's front page                                                 */
 /* ------------------------------------------------------------------ */
 
-export async function getHomepageData(townSlug?: string) {
-  /**
-   * The carousel is always scoped to exactly one town, even on the homepage
-   * where no town is in the URL. A Premium merchant buys placement in their
-   * own market; a carousel that mixed Carrollton and Malvern businesses
-   * would be selling something nobody agreed to. With no town chosen it
-   * falls back to the first active town rather than showing all of them.
-   *
-   * The deal feed below is different: cards there name their business and
-   * town, so a mixed feed is informative rather than misleading.
-   */
-  const towns = await getTowns();
-  const carouselTown = townSlug ?? towns[0]?.slug;
+export interface TownPageData {
+  carousel: Merchant[];
+  cards: Merchant[];
+  quiet: Merchant[];
+  categories: Array<Category & { deal_count: number }>;
+  dealCount: number;
+}
 
-  const [carousel, featured, latest, categories, merchantCount] = await Promise.all([
-    getCarouselDeals(carouselTown),
-    listDeals({ townSlug, featuredOnly: true, pageSize: 6 }),
-    listDealsGrouped({ townSlug, pageSize: 12 }),
+/**
+ * Everything the town view needs, in one round of parallel queries.
+ * `townSlug` undefined means every town.
+ */
+export async function getTownPageData(townSlug?: string): Promise<TownPageData> {
+  const [carousel, deals, quiet, categories] = await Promise.all([
+    getCarouselMerchants(townSlug),
+    listLiveDeals({ townSlug }),
+    listMerchantsWithoutLiveDeals({ townSlug }),
     getCategoriesWithCounts(townSlug),
-    publicDb.from('merchants').select('id', { count: 'exact', head: true }),
   ]);
-
-  const carouselIds = new Set(carousel.map((d) => d.id));
-
   return {
     carousel,
-    carouselTown: towns.find((t) => t.slug === carouselTown) ?? null,
-    // A deal already in the carousel is not repeated in the featured row.
-    // The same offer twice on one screen reads as a bug, not as emphasis.
-    featuredDeals: featured.items.filter((d) => !carouselIds.has(d.id)),
-    latestDeals: latest.items,
-    totalDeals: latest.total,
+    cards: groupDealsByMerchant(deals),
+    quiet,
     categories: categories.filter((c) => c.deal_count > 0),
-    merchantCount: merchantCount.count ?? 0,
+    dealCount: deals.length,
   };
 }
 
@@ -545,125 +489,82 @@ export async function getHomepageData(townSlug?: string) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Sixty seconds, not five minutes.
- *
- * The CDN caches by URL. At five minutes, publishing a deal and refreshing
- * showed the old page — while clicking a category filter produced a different
- * URL and therefore a fresh render. That made the site look intermittently
- * broken in a way that is very hard to reason about. A minute keeps nearly
- * all of the speed benefit and makes "publish, refresh, see it" behave the
- * way anyone would expect.
+ * Sixty seconds at the CDN, and admin saves purge it immediately (see
+ * lib/purge.ts). Browsers always revalidate.
  */
 export const CACHE_PUBLIC = 'public, max-age=0, s-maxage=60, stale-while-revalidate=600';
 export const CACHE_STATIC = 'public, max-age=0, s-maxage=86400, stale-while-revalidate=604800';
+/** Not-found pages are cached briefly, so a business published later appears quickly. */
+export const CACHE_NOT_FOUND = 'public, max-age=0, s-maxage=60';
+/** Error pages are never cached: the next request should try again. */
+export const CACHE_NONE = 'private, no-store, max-age=0';
+
+/** Tag on every cached public page, so an admin save can purge them all. */
+export const CACHE_TAG = 'pp-public';
 
 /* ------------------------------------------------------------------ */
 /* Universal search                                                    */
 /* ------------------------------------------------------------------ */
 
 export interface SearchResults {
-  merchants: Merchant[];
-  deals: Deal[];
+  /** Businesses with at least one matching or live deal, deals attached. */
+  cards: Merchant[];
+  /** Matching businesses with nothing live. */
+  quiet: Merchant[];
   total: number;
 }
 
 /**
- * One search that covers everything a person might type.
- *
- * The old search looked at deal headlines on /deals and business names on
- * /businesses, and nothing at all on the homepage. Typing a town, a category,
- * an address or a phone number found nothing anywhere — which reads as "this
- * site has nothing" rather than "this box only searches two fields".
- *
- * This looks at: business name, tagline, description, street, city, phone
- * (typed with or without punctuation), category name, town name, deal
- * headline and deal description. A match on any of them surfaces both the
- * business and its live deals.
+ * One search that covers everything a person might type: business name,
+ * tagline, description, street, city, ZIP, phone (with or without
+ * punctuation), category, town, and deal headline, description and terms.
+ * A match on a business surfaces all of its live deals.
  */
-export async function searchEverything(
-  rawTerm: string,
-  townSlug?: string,
-  limit = 12
-): Promise<SearchResults> {
+export async function searchEverything(rawTerm: string, townSlug?: string, limit = 24): Promise<SearchResults> {
   const term = safeTerm(rawTerm);
-  if (!term || term.length < 2) return { merchants: [], deals: [], total: 0 };
+  if (!term || term.length < 2) return { cards: [], quiet: [], total: 0 };
+  const f = await F();
 
   const townId = await townIdForSlug(townSlug);
-  if (townSlug && !townId) return { merchants: [], deals: [], total: 0 };
+  if (townSlug && !townId) return { cards: [], quiet: [], total: 0 };
 
-  // "330-555-0142", "(330) 555 0142" and "3305550142" must all find the same
-  // business, so phone matching runs on digits only.
   const digits = rawTerm.replace(/\D/g, '');
-
   const [catRes, townRes] = await Promise.all([
     publicDb.from('categories').select('id').ilike('name', `%${term}%`),
     publicDb.from('towns').select('id').ilike('name', `%${term}%`),
   ]);
-  const categoryIds = (catRes.data ?? []).map((c: any) => c.id);
-  const townIds = (townRes.data ?? []).map((t: any) => t.id);
+  const categoryIds = ((must('search categories', catRes) ?? []) as any[]).map((c) => c.id);
+  const townIds = ((must('search towns', townRes) ?? []) as any[]).map((t) => t.id);
 
-  const fields = [
-    `name.ilike.%${term}%`,
-    `tagline.ilike.%${term}%`,
-    `description.ilike.%${term}%`,
-    `address_line1.ilike.%${term}%`,
-    `city.ilike.%${term}%`,
-    `postal_code.ilike.%${term}%`,
+  const orFields = [
+    `name.ilike.%${term}%`, `tagline.ilike.%${term}%`, `description.ilike.%${term}%`,
+    `address_line1.ilike.%${term}%`, `city.ilike.%${term}%`, `postal_code.ilike.%${term}%`,
   ];
-  if (digits.length >= 3) fields.push(`phone_e164.ilike.%${digits}%`);
-  if (categoryIds.length) fields.push(`category_id.in.(${categoryIds.join(',')})`);
-  if (townIds.length) fields.push(`town_id.in.(${townIds.join(',')})`);
+  if (digits.length >= 3) orFields.push(`phone_e164.ilike.%${digits}%`);
+  if (categoryIds.length) orFields.push(`category_id.in.(${categoryIds.join(',')})`);
+  if (townIds.length) orFields.push(`town_id.in.(${townIds.join(',')})`);
 
-  let merchantQuery = publicDb.from('merchants').select(MERCHANT_FIELDS).or(fields.join(','));
+  let merchantQuery = publicDb.from('merchants').select(f.merchant).or(orFields.join(','));
   if (townId) merchantQuery = merchantQuery.eq('town_id', townId);
 
   let dealQuery = publicDb
     .from('deals')
-    .select(`${DEAL_FIELDS}, merchant:merchants!inner ( ${MERCHANT_FIELDS} )`)
+    .select(`${f.deal}, merchant:merchants!inner ( ${f.merchant} )`)
     .or(`headline.ilike.%${term}%,description.ilike.%${term}%,terms.ilike.%${term}%`);
   if (townId) dealQuery = dealQuery.eq('merchant.town_id', townId);
 
-  const [merchantRes, dealRes] = await Promise.all([
-    merchantQuery.order('is_featured', { ascending: false }).order('name').limit(limit * 2),
-    dealQuery.order('is_featured', { ascending: false }).limit(limit * 2),
-  ]);
+  const [merchantRes, dealRes] = await Promise.all([merchantQuery.limit(limit * 2), dealQuery.limit(limit * 3)]);
+  const matchedMerchants = (must('search businesses', merchantRes) ?? []) as unknown as Merchant[];
+  const matchedDeals = (must('search deals', dealRes) ?? []) as unknown as Deal[];
 
-  const merchants = (merchantRes.data ?? []) as unknown as Merchant[];
-  const deals = (dealRes.data ?? []) as unknown as Deal[];
+  // Every business that matched, directly or through a deal, with all of
+  // its live deals attached — not just the ones whose text matched.
+  const byId = new Map<string, Merchant>();
+  for (const m of matchedMerchants) byId.set(m.id, { ...m });
+  for (const d of matchedDeals) if (d.merchant && !byId.has(d.merchant.id)) byId.set(d.merchant.id, { ...d.merchant });
+  const merchants = await attachLiveDeals([...byId.values()]);
 
-  // A business matching by phone or address should surface its offers too,
-  // even when the offer text says nothing about the search term.
-  const dealIds = new Set(deals.map((d) => d.id));
-  if (merchants.length) {
-    const ids = merchants.map((m) => m.id);
-    let extra = publicDb
-      .from('deals')
-      .select(`${DEAL_FIELDS}, merchant:merchants!inner ( ${MERCHANT_FIELDS} )`)
-      .in('merchant_id', ids)
-      .limit(limit * 2);
-    const { data } = await extra;
-    for (const deal of (data ?? []) as unknown as Deal[]) {
-      if (!dealIds.has(deal.id)) { deals.push(deal); dealIds.add(deal.id); }
-    }
-  }
-
-  // One card per business in the results, same as the main feed.
-  const seen = new Set<string>();
-  const grouped: Deal[] = [];
-  for (const deal of deals) {
-    const id = deal.merchant?.id;
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    grouped.push({ ...deal, sibling_count: deals.filter((d) => d.merchant?.id === id).length - 1 });
-  }
-
-  // Businesses with no live deal still deserve to be findable — someone
-  // searching a phone number wants the business, not an offer.
-  const withoutDeals = merchants.filter((m) => !seen.has(m.id));
-
-  return {
-    merchants: withoutDeals.slice(0, limit),
-    deals: grouped.slice(0, limit),
-    total: grouped.length + withoutDeals.length,
-  };
+  const cards = merchants.filter((m) => (m.deals?.length ?? 0) > 0).sort(compareMerchants);
+  const quiet = merchants.filter((m) => (m.deals?.length ?? 0) === 0).sort(compareMerchants);
+  return { cards: cards.slice(0, limit), quiet: quiet.slice(0, limit), total: cards.length + quiet.length };
 }

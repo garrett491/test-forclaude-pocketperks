@@ -93,4 +93,7 @@ const year = new Date().getFullYear();
   }
   .footer-base p { margin: 0; }
   .site-footer :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+  /* Headings default to the ink colour, which was dark on dark green here —
+     the newsletter heading in the footer was all but invisible. */
+  .site-footer :global(.nl-title) { color: var(--pp-footer-text); }
 </style>

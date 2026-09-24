@@ -1,8 +1,8 @@
 ---
 import Admin from '../../layouts/Admin.astro';
-import { str, int, humanError } from '../../lib/admin';
+import { str, int, writeFailure } from '../../lib/admin';
 import {
-  SWATCHES, FONTS, COLOR_FIELDS, DEFAULT_THEME,
+  SWATCHES, FONTS, COLOR_FIELDS,
   resolveTheme, swatchValue, contrastRatio, contrastVerdict,
   type ThemeTokens,
 } from '../../lib/theme';
@@ -18,12 +18,12 @@ if (Astro.request.method === 'POST') {
   const intent = String(form.get('intent') ?? 'save');
 
   if (intent === 'reset') {
-    const { error: resetError } = await db
+    error = writeFailure(await db
       .from('site_settings')
       .update({ value: {}, updated_by: profile.id })
-      .eq('key', 'theme.tokens');
-    if (resetError) error = humanError(resetError);
-    else success = 'Back to the original Pocket Perks look.';
+      .eq('key', 'theme.tokens')
+      .select('key'));
+    if (!error) success = 'Back to the original Pocket Perks look.';
   } else {
     const tokens: ThemeTokens = {};
     for (const field of COLOR_FIELDS) {
@@ -45,12 +45,12 @@ if (Astro.request.method === 'POST') {
     const density = String(form.get('density') ?? 'normal');
     if (['compact', 'normal', 'roomy'].includes(density)) tokens.density = density;
 
-    const { error: saveError } = await db
+    error = writeFailure(await db
       .from('site_settings')
       .update({ value: tokens, updated_by: profile.id })
-      .eq('key', 'theme.tokens');
-    if (saveError) error = humanError(saveError);
-    else success = 'Saved. The site updates within a minute.';
+      .eq('key', 'theme.tokens')
+      .select('key'));
+    if (!error) success = 'Saved. The site shows the new look straight away.';
   }
 }
 

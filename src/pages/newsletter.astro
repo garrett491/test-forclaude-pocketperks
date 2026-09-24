@@ -1,0 +1,40 @@
+---
+import Base from '../layouts/Base.astro';
+import NewsletterForm from '../components/NewsletterForm.astro';
+import { getSiteChrome, CACHE_NONE } from '../lib/queries';
+
+/**
+ * Where the signup form lands when it is posted without JavaScript, and a
+ * plain page to sign up from. With JavaScript the form answers in place.
+ */
+Astro.response.headers.set('Cache-Control', CACHE_NONE);
+const { settings, blocks } = await getSiteChrome(Astro.locals);
+// Fixed wording only; never text from the URL.
+const MESSAGES: Record<string, string> = {
+  ok: 'You’re on the list. Watch your inbox.',
+  invalid: 'That email address doesn’t look right. Check it and try again.',
+  limited: 'Too many signups from this connection. Please try again later.',
+  error: 'That didn’t save because of a problem on our side. Please try again in a moment.',
+};
+const status = Astro.url.searchParams.get('status') ?? '';
+const message = MESSAGES[status];
+const copy = (blocks['home.newsletter']?.payload ?? {}) as Record<string, string>;
+---
+
+<Base title="Email updates" noindex={true} canonicalPath="/newsletter">
+  <div class="wrap section nl-page">
+    <h1>Email updates</h1>
+    {message && (status === 'ok'
+      ? <p class="form-success" role="status">{message}</p>
+      : <p class="form-error" role="alert">{message}</p>)}
+    {status !== 'ok' && (
+      <NewsletterForm source="newsletter-page" settings={settings}
+        headline={copy.headline} body={copy.body} ctaLabel={copy.cta_label} finePrint={copy.fine_print} />
+    )}
+    <p><a href="/">Back to today’s deals</a></p>
+  </div>
+</Base>
+
+<style>
+  .nl-page { max-width: 36rem; display: flex; flex-direction: column; gap: var(--pp-space-4); }
+</style>

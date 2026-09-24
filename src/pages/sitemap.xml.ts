@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { publicDb } from '../lib/supabase';
+import { logDataError } from '../lib/errors';
 
 export const prerender = false;
 
@@ -21,8 +22,19 @@ export const GET: APIRoute = async ({ site }) => {
     publicDb.from('categories').select('slug, updated_at'),
   ]);
 
+  // An empty sitemap served during an outage would tell Google every page
+  // had gone. A 503 tells it to come back later instead.
+  const failed = [merchants, deals, towns, categories].find((r) => r.error);
+  if (failed?.error) {
+    logDataError('sitemap', failed.error);
+    return new Response('Temporarily unavailable', {
+      status: 503,
+      headers: { 'Retry-After': '300', 'Cache-Control': 'private, no-store' },
+    });
+  }
+
   const entry = (path: string, lastmod?: string, priority = '0.6', freq = 'weekly') =>
-    `  <url>\n    <loc>${origin}${path}</loc>\n` +
+    `  <url>\n    <loc>${origin}${path.replace(/&/g, '&amp;')}</loc>\n` +
     (lastmod ? `    <lastmod>${new Date(lastmod).toISOString().slice(0, 10)}</lastmod>\n` : '') +
     `    <changefreq>${freq}</changefreq>\n    <priority>${priority}</priority>\n  </url>`;
 
@@ -31,6 +43,9 @@ export const GET: APIRoute = async ({ site }) => {
     entry('/deals', undefined, '0.9', 'daily'),
     entry('/businesses', undefined, '0.8', 'weekly'),
     entry('/for-business', undefined, '0.5', 'monthly'),
+    entry('/privacy', undefined, '0.2', 'yearly'),
+    entry('/terms', undefined, '0.2', 'yearly'),
+    entry('/accessibility', undefined, '0.2', 'yearly'),
   ];
 
   for (const t of towns.data ?? []) urls.push(entry(`/${t.slug}`, t.updated_at, '0.7'));
