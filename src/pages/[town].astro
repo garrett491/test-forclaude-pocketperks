@@ -1,0 +1,112 @@
+---
+import Base from '../layouts/Base.astro';
+import DealCard from '../components/DealCard.astro';
+import Carousel from '../components/Carousel.astro';
+import MerchantCard from '../components/MerchantCard.astro';
+import EmptyState from '../components/EmptyState.astro';
+import { getTown, listDealsGrouped, listMerchants, getCategoriesWithCounts, getCarouselDeals, getSiteChrome, CACHE_PUBLIC } from '../lib/queries';
+
+/**
+ * The town landing page.
+ *
+ * This is the page that has a chance at "deals in carrollton ohio" and
+ * similar local searches. It exists because a directory's organic traffic
+ * comes from place and category pages, not from a homepage — and the old
+ * site had exactly one indexable URL.
+ */
+const { town: slug } = Astro.params;
+const town = await getTown(slug!);
+
+if (!town) {
+  // Renders the real 404 page rather than an empty body.
+  return Astro.rewrite('/404');
+}
+
+Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
+
+const [deals, merchants, categories, carousel, { settings }] = await Promise.all([
+  listDealsGrouped({ townSlug: town.slug, pageSize: 12 }),
+  listMerchants({ townSlug: town.slug, pageSize: 8 }),
+  getCategoriesWithCounts(town.slug),
+  // Each town gets its own carousel. A Premium merchant is buying placement
+  // in their market, not across every market Pocket Perks covers.
+  getCarouselDeals(town.slug),
+  getSiteChrome(),
+]);
+
+const carouselSeconds = Number(settings['carousel.seconds_per_slide'] ?? 8) || 8;
+const carouselAutoplay = settings['carousel.autoplay'] !== false;
+
+const usable = categories.filter((c) => c.deal_count > 0);
+const place = `${town.name}, ${town.state_code}`;
+---
+
+<Base
+  pathTownSlug={town.slug}
+  title={town.seo_title ?? `Local Deals in ${place}`}
+  description={
+    town.seo_description ??
+    `Current coupons and discounts from ${merchants.total} ${merchants.total === 1 ? 'business' : 'businesses'} in ${place}. Free to use, no signup.`
+  }
+  canonicalPath={`/${town.slug}`}
+  breadcrumbs={[{ name: 'Home', href: '/' }, { name: town.name, href: `/${town.slug}` }]}
+>
+  <header class="town-head">
+    <div class="wrap">
+      <h1>Deals in {place}</h1>
+      <p class="lede">
+        {deals.total} {deals.total === 1 ? 'offer' : 'offers'} from{' '}
+        {merchants.total} local {merchants.total === 1 ? 'business' : 'businesses'}.
+      </p>
+    </div>
+  </header>
+
+  <Carousel deals={carousel} townName={town.name}
+            seconds={carouselSeconds} autoplay={carouselAutoplay} />
+
+  <div class="wrap section">
+    {usable.length > 1 && (
+      <div class="chip-row" role="list" aria-label="Browse by category">
+        {usable.map((c) => (
+          <a class="chip" role="listitem" href={`/deals?town=${town.slug}&category=${c.slug}`}>
+            {c.name}<span class="chip-count">{c.deal_count}</span>
+          </a>
+        ))}
+      </div>
+    )}
+
+    <section aria-labelledby="td-title" class="block">
+      <div class="section-head">
+        <h2 id="td-title">Current deals</h2>
+        <a href={`/deals?town=${town.slug}`}>See all</a>
+      </div>
+      {deals.items.length ? (
+        <div class="grid">{deals.items.map((d, i) => <DealCard deal={d} priority={i < 2} />)}</div>
+      ) : (
+        <EmptyState
+          headline={`No deals in ${town.name} yet`}
+          body="Businesses here are being added. Check the directory in the meantime."
+          ctaLabel="See businesses" ctaHref="/businesses"
+        />
+      )}
+    </section>
+
+    {merchants.items.length > 0 && (
+      <section aria-labelledby="tb-title" class="block">
+        <div class="section-head">
+          <h2 id="tb-title">Businesses in {town.name}</h2>
+          <a href={`/businesses?town=${town.slug}`}>See all</a>
+        </div>
+        <div class="grid">{merchants.items.map((m) => <MerchantCard merchant={m} />)}</div>
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .town-head { background: var(--pp-deep); color: var(--pp-white); padding-block: var(--pp-space-6); border-bottom: var(--pp-stitch); }
+  .town-head h1 { color: var(--pp-white); margin-bottom: var(--pp-space-2); }
+  .lede { color: rgba(255,255,255,0.85); margin: 0; font-variant-numeric: tabular-nums; }
+  .chip-row { margin-bottom: var(--pp-space-5); }
+  .block + .block { margin-top: var(--pp-space-7); }
+</style>

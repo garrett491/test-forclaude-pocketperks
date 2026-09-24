@@ -1,0 +1,179 @@
+---
+import Base from '../layouts/Base.astro';
+import MerchantCard from '../components/MerchantCard.astro';
+import EmptyState from '../components/EmptyState.astro';
+import Pagination from '../components/Pagination.astro';
+import LocationPicker from '../components/LocationPicker.astro';
+import { getSiteChrome } from '../lib/queries';
+import { resolveTownContext, townFilter, withTown } from '../lib/location';
+import { listMerchants, getCategoriesWithCounts, getTowns, PAGE_SIZE, CACHE_PUBLIC } from '../lib/queries';
+
+Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
+
+const params = Astro.url.searchParams;
+const categorySlug = params.get('category') ?? undefined;
+// townSlug resolved below from URL, cookie and default together.
+const query = params.get('q') ?? undefined;
+const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
+
+const towns = await getTowns();
+const townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
+const townSlug = townFilter(townContext);
+if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
+
+const [categories, results, { blocks }] = await Promise.all([
+  getCategoriesWithCounts(townSlug),
+  listMerchants({ categorySlug, townSlug, query, page, pageSize: PAGE_SIZE }),
+  getSiteChrome(),
+]);
+
+const activeCategory = categories.find((c) => c.slug === categorySlug);
+const title = activeCategory ? `${activeCategory.name} Businesses` : 'Local Businesses';
+
+const buildUrl = (patch: Record<string, string | null>) => {
+  const url = new URL(Astro.url);
+  url.searchParams.delete('page');
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) url.searchParams.delete(k); else url.searchParams.set(k, v);
+  }
+  return url.pathname + url.search;
+};
+---
+
+<Base
+  title={title}
+  description={`Every business on Pocket Perks${activeCategory ? ` in ${activeCategory.name.toLowerCase()}` : ''}. Hours, phone numbers, directions and current offers.`}
+  canonicalPath={categorySlug ? `/businesses?category=${categorySlug}` : '/businesses'}
+  noindex={!!query || page > 1}
+  breadcrumbs={[
+    { name: 'Home', href: '/' },
+    { name: 'Businesses', href: '/businesses' },
+  ]}
+>
+  <div class="wrap section">
+    <header class="page-head">
+      <h1>{title}</h1>
+      <p class="muted" data-result-count>
+        {results.total} {results.total === 1 ? 'business' : 'businesses'}
+      </p>
+    </header>
+
+    {/*
+      Filters as you type. The whole page of businesses is already in the
+      document, so narrowing it is instant and cannot show a partial answer
+      as if it were the whole one. Without JavaScript the form still submits
+      and the server does the same search.
+    */}
+    {/*
+      Location filtering is stated, never silent. A visitor who does not
+      realise a town filter is on would read a short list as "Pocket Perks
+      has almost nothing" rather than "this town has almost nothing".
+    */}
+    {towns.length > 1 && (
+      <div class="town-banner">
+        <span class="tb-text">
+          {townContext.showingAll
+            ? 'Showing every town'
+            : <>Showing <strong>{townContext.town?.name}</strong>{townContext.isDefault && ' — not your town?'}</>}
+        </span>
+        <div class="tb-actions">
+          <button class="tb-change" type="button" data-town-open>Change town</button>
+          {!townContext.showingAll && (
+            <a class="tb-all" href={withTown(Astro.url, null)}>See every town</a>
+          )}
+        </div>
+      </div>
+    )}
+
+    <form class="search-row" action="/businesses" method="get" role="search">
+      <label class="sr-only" for="biz-q">Search businesses</label>
+      <input class="input" id="biz-q" name="q" type="search" value={query ?? ''}
+             placeholder="Name, town, phone, category…" autocomplete="off"
+             data-server-search data-target="#biz-results" />
+      <button class="btn btn-primary" type="submit">Search</button>
+    </form>
+
+    <div class="chip-row" role="list" aria-label="Filter by category" data-hide-on-search>
+      <a class="chip" role="listitem" href={buildUrl({ category: null })}
+         aria-current={!categorySlug ? 'true' : undefined}>All</a>
+      {categories.map((c) => (
+        <a class="chip" role="listitem" href={buildUrl({ category: c.slug })}
+           aria-current={categorySlug === c.slug ? 'true' : undefined}>{c.name}</a>
+      ))}
+      {/* Town appears only once there is more than one to choose between. */}
+      {towns.length > 1 && towns.map((t) => (
+        <a class="chip" role="listitem" href={buildUrl({ town: townSlug === t.slug ? null : t.slug })}
+           aria-current={townSlug === t.slug ? 'true' : undefined}>{t.name}</a>
+      ))}
+    </div>
+
+    {results.items.length > 0 ? (
+      <>
+        <div class="grid biz-grid" id="biz-results">
+          {results.items.map((m, i) => <MerchantCard merchant={m} priority={i < 4} />)}
+        </div>
+
+        <Pagination page={results.page} pageCount={results.pageCount} baseUrl={Astro.url} />
+      </>
+    ) : (
+      /* An empty town says so. Without this a visitor in a quiet town reads a
+         blank page as "Pocket Perks has nothing" rather than "this town has
+         nothing yet". */
+      townContext.town && !townContext.showingAll && !query && !categorySlug ? (
+        <EmptyState
+          block={blocks['empty.no_town_results']}
+          headline={`Nothing in ${townContext.town.name} yet`}
+          body="No businesses here so far. Try another town, or see everything on Pocket Perks."
+          ctaLabel="See every town"
+          ctaHref={withTown(Astro.url, null)}
+        />
+      ) : (
+        <EmptyState
+          headline="No businesses match that"
+          body="Try clearing the filters, or browse everything on offer."
+          ctaLabel="Show all businesses" ctaHref="/businesses"
+        />
+      )
+    )}
+  </div>
+</Base>
+
+<style>
+  .page-head { margin-bottom: var(--pp-space-4); }
+  .page-head h1 { margin-bottom: var(--pp-space-1); }
+  .page-head p { margin: 0; font-size: var(--pp-text-sm); font-variant-numeric: tabular-nums; }
+.town-banner {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--pp-space-3); flex-wrap: wrap;
+    padding: var(--pp-space-3) var(--pp-space-4);
+    margin-bottom: var(--pp-space-4);
+    background: var(--pp-surface);
+    border: 1px solid var(--pp-line);
+    border-left: var(--pp-stitch);
+    border-radius: var(--pp-radius-inset);
+    font-size: var(--pp-text-sm);
+  }
+  .tb-text strong { color: var(--pp-link); }
+  .tb-actions { display: flex; gap: var(--pp-space-2); align-items: center; flex-wrap: wrap; }
+  .tb-change {
+    min-height: 38px; padding-inline: var(--pp-space-4);
+    background: var(--pp-action-bg); color: var(--pp-action-text);
+    border: 0; border-radius: var(--pp-radius-chip);
+    font-size: var(--pp-text-xs); font-weight: 700; cursor: pointer;
+  }
+  .tb-change:hover { background: color-mix(in srgb, var(--pp-action-bg) 88%, black); }
+  .tb-all {
+    min-height: 38px; display: inline-flex; align-items: center;
+    font-size: var(--pp-text-xs); font-weight: 700;
+  }
+  @media (max-width: 30rem) {
+    .town-banner { flex-direction: column; align-items: flex-start; }
+    .tb-actions { width: 100%; }
+    .tb-change { flex: 1; }
+  }
+
+  .search-row { display: flex; gap: var(--pp-space-2); margin-bottom: var(--pp-space-4); }
+  .search-row .input { flex: 1; min-width: 0; }
+  .chip-row { margin-bottom: var(--pp-space-5); }
+  .biz-grid { align-items: stretch; }
+</style>

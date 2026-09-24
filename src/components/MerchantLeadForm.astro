@@ -1,0 +1,59 @@
+---
+/**
+ * The "list your business" form.
+ *
+ * Four required fields and one optional message. Every extra field on a lead
+ * form costs completions, and everything else can be asked on the phone call
+ * this is meant to produce.
+ */
+---
+
+<form class="lead-form" id="enquiry" data-lead novalidate>
+  <div class="form-grid">
+    <div class="field">
+      <label for="lead-business">Business name</label>
+      <input class="input" id="lead-business" name="business_name" required autocomplete="organization" />
+    </div>
+    <div class="field">
+      <label for="lead-name">Your name</label>
+      <input class="input" id="lead-name" name="contact_name" required autocomplete="name" />
+    </div>
+    <div class="field">
+      <label for="lead-phone">Phone</label>
+      <input class="input" id="lead-phone" name="phone" type="tel" required autocomplete="tel" />
+    </div>
+    <div class="field">
+      <label for="lead-email">Email</label>
+      <input class="input" id="lead-email" name="email" type="email" required autocomplete="email" />
+    </div>
+    <div class="field">
+      <label for="lead-town">Town</label>
+      <input class="input" id="lead-town" name="town" autocomplete="address-level2" />
+    </div>
+    <div class="field">
+      <label for="lead-message">Anything else? <span class="opt">Optional</span></label>
+      <textarea class="input" id="lead-message" name="message" rows="3"></textarea>
+    </div>
+  </div>
+
+  <div class="hp-field" aria-hidden="true">
+    <label for="lead-company-url">Website</label>
+    <input id="lead-company-url" name="company_url" type="text" tabindex="-1" autocomplete="off" />
+  </div>
+
+  <button class="btn btn-primary" type="submit">Send enquiry</button>
+  <div class="lead-status" role="status" aria-live="polite"></div>
+</form>
+
+<style>
+  .lead-form { display: flex; flex-direction: column; gap: var(--pp-space-4); }
+  .lead-form .form-grid { display: grid; gap: var(--pp-space-4); grid-template-columns: 1fr; }
+  @media (min-width: 40rem) { .lead-form .form-grid { grid-template-columns: 1fr 1fr; } }
+  .lead-form textarea.input { min-height: 5.5rem; padding-block: var(--pp-space-3); border-radius: var(--pp-radius-inset); }
+  .opt { font-weight: 400; color: var(--pp-muted); font-size: var(--pp-text-xs); }
+  .lead-form button { align-self: flex-start; }
+  .lead-status:empty { display: none; }
+  .lead-status[data-state='error'] { color: var(--pp-danger); font-weight: 600; font-size: var(--pp-text-sm); }
+  .lead-status[data-state='ok'] { color: var(--pp-green); font-weight: 600; }
+</style>
+

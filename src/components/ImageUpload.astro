@@ -1,0 +1,106 @@
+---
+import { imageUrl } from '../lib/format';
+import type { MediaAsset } from '../lib/types';
+
+interface Props {
+  /** Name of the hidden input carrying the media id back to the form. */
+  name: string;
+  label: string;
+  hint?: string;
+  current?: MediaAsset | null;
+  /** Longest edge after resizing. Logos need far less than cover photos. */
+  maxEdge?: number;
+  aspect?: 'square' | 'wide';
+}
+
+const { name, label, hint, current = null, maxEdge = 1200, aspect = 'wide' } = Astro.props;
+const previewSrc = current ? imageUrl(current, aspect === 'square' ? 200 : 480) : null;
+---
+
+<div class="upload" data-upload data-max-edge={maxEdge}>
+  <span class="upload-label" id={`${name}-label`}>{label}</span>
+
+  <input type="hidden" name={name} value={current?.id ?? ''} data-media-id />
+
+  <div class={`preview ${aspect}`} data-preview>
+    {previewSrc ? (
+      <img src={previewSrc} alt={current?.alt_text || ''} width="240" height={aspect === 'square' ? 240 : 150} />
+    ) : (
+      <span class="preview-empty">No image yet</span>
+    )}
+  </div>
+
+  <div class="upload-controls">
+    {/*
+      A real file input, labelled, keyboard reachable. Styled buttons that
+      hide the input behind a div are a common way to make uploads
+      unreachable by keyboard, so this stays a plain input.
+    */}
+    <label class="file-label" for={`${name}-file`}>
+      Choose image
+      <input
+        class="file-input" id={`${name}-file`} type="file"
+        accept="image/jpeg,image/png,image/webp,image/avif"
+        data-file aria-describedby={`${name}-hint`}
+      />
+    </label>
+    <button class="btn btn-ghost btn-sm danger-text" type="button" data-clear
+            hidden={!current}>Remove</button>
+  </div>
+
+  <div class="field alt-field">
+    <label for={`${name}-alt`}>Describe the image</label>
+    <input class="input" id={`${name}-alt`} name={`${name}_alt`} maxlength="200"
+           value={current?.alt_text ?? ''} data-alt
+           placeholder="Storefront on Canton Road" />
+    <p class="hint">
+      For people using a screen reader, and shown if the image fails to load.
+      Describe what is in it, not that it is a photo.
+    </p>
+  </div>
+
+  <p class="hint" id={`${name}-hint`}>
+    {hint ?? 'JPEG, PNG or WebP. Large photos are shrunk automatically before uploading.'}
+  </p>
+  <p class="upload-status" role="status" aria-live="polite"></p>
+</div>
+
+<style>
+  .upload { display: flex; flex-direction: column; gap: var(--pp-space-3); }
+  .upload-label { font-size: var(--pp-text-sm); font-weight: 600; }
+
+  .preview {
+    border: 1px dashed var(--pp-line-strong);
+    border-radius: var(--pp-radius-inset);
+    background: var(--pp-paper);
+    display: grid; place-items: center;
+    overflow: hidden;
+  }
+  .preview.wide { aspect-ratio: 16 / 10; max-width: 20rem; }
+  .preview.square { width: 8rem; height: 8rem; }
+  .preview img { width: 100%; height: 100%; object-fit: contain; }
+  .preview-empty { font-size: var(--pp-text-sm); color: var(--pp-muted); }
+
+  .upload-controls { display: flex; gap: var(--pp-space-2); align-items: center; flex-wrap: wrap; }
+  .file-label {
+    display: inline-flex; align-items: center;
+    min-height: var(--pp-tap-min);
+    padding: var(--pp-space-2) var(--pp-space-4);
+    border: 1px solid var(--pp-line-strong);
+    border-radius: var(--pp-radius-chip);
+    background: var(--pp-surface);
+    font-size: var(--pp-text-sm); font-weight: 600; cursor: pointer;
+  }
+  .file-label:hover { border-color: var(--pp-green); background: var(--pp-deep-050); }
+  .file-label:focus-within { outline: 3px solid var(--pp-focus); outline-offset: 2px; }
+  .file-input { width: 0.1px; height: 0.1px; opacity: 0; position: absolute; }
+  .danger-text { color: var(--pp-danger); }
+
+  .alt-field { max-width: 28rem; }
+  .upload-status:empty { display: none; }
+  .upload-status { font-size: var(--pp-text-sm); font-weight: 600; margin: 0; }
+  .upload-status[data-state='error'] { color: var(--pp-danger); }
+  .upload-status[data-state='ok'] { color: var(--pp-green); }
+  .upload-status[data-state='busy'] { color: var(--pp-muted); }
+</style>
+

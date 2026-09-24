@@ -1,0 +1,202 @@
+---
+import Admin from '../../layouts/Admin.astro';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+
+const today = new Date();
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const from = iso(new Date(today.getTime() - 29 * 86_400_000));
+const to = iso(today);
+
+const [summaryRes, merchantsRes, dealsRes, subsRes, leadsRes, expiringRes] = await Promise.all([
+  db.rpc('merchant_report_summary', { p_from: from, p_to: to }),
+  db.from('merchants').select('id, status', { count: 'exact' }),
+  db.from('deals').select('id, status', { count: 'exact' }),
+  db.from('subscribers').select('id, created_at', { count: 'exact' }).eq('status', 'active'),
+  db.from('merchant_leads').select('id', { count: 'exact', head: true }).eq('status', 'new'),
+  db.from('deals')
+    .select('id, headline, ends_at, merchant:merchants ( id, name, slug )')
+    .eq('status', 'active')
+    .not('ends_at', 'is', null)
+    .lte('ends_at', new Date(Date.now() + 7 * 86_400_000).toISOString())
+    .order('ends_at'),
+]);
+
+const summary = (summaryRes.data ?? []) as any[];
+const merchants = merchantsRes.data ?? [];
+const deals = dealsRes.data ?? [];
+const subscribers = subsRes.data ?? [];
+const expiring = (expiringRes.data ?? []) as any[];
+
+const activeMerchants = merchants.filter((m: any) => m.status === 'active').length;
+const draftMerchants = merchants.filter((m: any) => m.status === 'draft').length;
+const liveDeals = deals.filter((d: any) => d.status === 'active').length;
+const newSubs = subscribers.filter(
+  (s: any) => Date.now() - new Date(s.created_at).getTime() < 30 * 86_400_000
+).length;
+
+const totals = summary.reduce(
+  (acc, row) => ({
+    impressions: acc.impressions + (row.impressions ?? 0),
+    views: acc.views + (row.profile_views ?? 0) + (row.deal_opens ?? 0),
+    intent: acc.intent + (row.intent_actions ?? 0),
+  }),
+  { impressions: 0, views: 0, intent: 0 }
+);
+
+/** Merchants with no activity at all are the ones at risk of not renewing. */
+const quiet = summary.filter((r) => (r.intent_actions ?? 0) === 0 && (r.impressions ?? 0) === 0);
+
+const dayLabel = (iso: string | null) => {
+  if (!iso) return '';
+  const days = Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+  if (days < 0) return 'expired';
+  if (days === 0) return 'today';
+  if (days === 1) return 'tomorrow';
+  return `in ${days} days`;
+};
+---
+
+<Admin title={`Hello, ${profile.display_name.split(' ')[0]}`} profile={profile}>
+  <div slot="actions" class="row">
+    <a class="btn btn-outline btn-sm" href="/admin/merchants/new">Add business</a>
+    <a class="btn btn-primary btn-sm" href="/admin/deals/new">Add deal</a>
+  </div>
+
+  <section aria-labelledby="activity-title">
+    <h2 id="activity-title" class="sr-only">Activity in the last 30 days</h2>
+    <div class="stat-grid">
+      <div class="stat">
+        <p class="stat-value">{totals.impressions.toLocaleString()}</p>
+        <p class="stat-label">Deal impressions</p>
+        <p class="stat-note">Times a deal was on someone's screen</p>
+      </div>
+      <div class="stat">
+        <p class="stat-value">{totals.views.toLocaleString()}</p>
+        <p class="stat-label">Profile and deal views</p>
+        <p class="stat-note">Someone opened the page</p>
+      </div>
+      <div class="stat">
+        <p class="stat-value">{totals.intent.toLocaleString()}</p>
+        <p class="stat-label">Intent actions</p>
+        <p class="stat-note">Calls, directions, website, code copies</p>
+      </div>
+      <div class="stat">
+        <p class="stat-value">{newSubs.toLocaleString()}</p>
+        <p class="stat-label">New subscribers</p>
+        <p class="stat-note">{subscribers.length} on the list in total</p>
+      </div>
+    </div>
+    <p class="range-note">Last 30 days ({from} to {to}), bot traffic excluded.</p>
+  </section>
+
+  {/* Everything that needs a decision, in one place, ordered by urgency. */}
+  {(expiring.length > 0 || draftMerchants > 0 || (leadsRes.count ?? 0) > 0) && (
+    <section class="panel" aria-labelledby="attention-title">
+      <h2 id="attention-title">Needs attention</h2>
+      <p class="panel-hint">Things that will not fix themselves.</p>
+
+      <ul class="list-plain attention">
+        {expiring.map((d) => (
+          <li>
+            <span>
+              <strong>{d.merchant?.name}</strong> — “{d.headline}” ends {dayLabel(d.ends_at)}
+            </span>
+            <a class="btn btn-outline btn-sm" href={`/admin/deals/${d.id}`}>Edit deal</a>
+          </li>
+        ))}
+        {(leadsRes.count ?? 0) > 0 && (
+          <li>
+            <span>{leadsRes.count} new {leadsRes.count === 1 ? 'enquiry' : 'enquiries'} from businesses</span>
+            <a class="btn btn-outline btn-sm" href="/admin/leads">Open enquiries</a>
+          </li>
+        )}
+        {draftMerchants > 0 && (
+          <li>
+            <span>{draftMerchants} {draftMerchants === 1 ? 'business is' : 'businesses are'} still in draft and not visible on the site</span>
+            <a class="btn btn-outline btn-sm" href="/admin/merchants?status=draft">Review drafts</a>
+          </li>
+        )}
+      </ul>
+    </section>
+  )}
+
+  <section class="panel" aria-labelledby="perf-title">
+    <h2 id="perf-title">How each business is doing</h2>
+    <p class="panel-hint">
+      Last 30 days. This is the table to look at before a renewal conversation.
+    </p>
+
+    {summary.length > 0 ? (
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th scope="col">Business</th>
+              <th scope="col">Plan</th>
+              <th scope="col" class="num">Impressions</th>
+              <th scope="col" class="num">Views</th>
+              <th scope="col" class="num">Intent</th>
+              <th scope="col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {summary.map((row) => (
+              <tr>
+                <td><a href={`/admin/reports?merchant=${row.merchant_id}`}>{row.merchant_name}</a></td>
+                <td><span class="pill pill-tier">{row.tier}</span></td>
+                <td class="num">{(row.impressions ?? 0).toLocaleString()}</td>
+                <td class="num">{((row.profile_views ?? 0) + (row.deal_opens ?? 0)).toLocaleString()}</td>
+                <td class="num"><strong>{(row.intent_actions ?? 0).toLocaleString()}</strong></td>
+                <td><a href={`/admin/reports?merchant=${row.merchant_id}`}>Report</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <p class="empty-row">
+        No activity recorded yet. Numbers appear the day after the first visitors arrive.
+      </p>
+    )}
+
+    {quiet.length > 0 && summary.length > quiet.length && (
+      <p class="quiet-note">
+        {quiet.length} {quiet.length === 1 ? 'business has' : 'businesses have'} no
+        recorded activity this period. Worth checking they have a live deal before
+        their renewal comes up.
+      </p>
+    )}
+  </section>
+
+  <section class="stat-grid counts">
+    <div class="stat">
+      <p class="stat-value">{activeMerchants}</p>
+      <p class="stat-label">Live businesses</p>
+    </div>
+    <div class="stat">
+      <p class="stat-value">{liveDeals}</p>
+      <p class="stat-label">Live deals</p>
+    </div>
+  </section>
+</Admin>
+
+<style>
+  .range-note { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: var(--pp-space-2) 0 var(--pp-space-5); }
+  .attention { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+  .attention li {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--pp-space-3); flex-wrap: wrap;
+    padding: var(--pp-space-3);
+    background: var(--pp-paper); border-radius: var(--pp-radius-inset);
+    font-size: var(--pp-text-sm);
+  }
+  .quiet-note {
+    margin: var(--pp-space-4) 0 0; font-size: var(--pp-text-sm);
+    color: var(--pp-muted); border-left: var(--pp-stitch);
+    padding-left: var(--pp-space-4);
+  }
+  .counts { margin-top: var(--pp-space-4); }
+</style>

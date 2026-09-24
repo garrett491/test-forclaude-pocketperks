@@ -1,0 +1,49 @@
+---
+interface Props { page: number; pageCount: number; baseUrl: URL; }
+const { page, pageCount, baseUrl } = Astro.props;
+
+const hidden = pageCount <= 1;
+
+const link = (n: number) => {
+  const url = new URL(baseUrl);
+  if (n === 1) url.searchParams.delete('page');
+  else url.searchParams.set('page', String(n));
+  return url.pathname + url.search;
+};
+
+/* A compact window: first, last, and the pages either side of the current
+   one. Listing every page is unusable past a dozen and pointless below it. */
+const window = new Set<number>([1, pageCount, page - 1, page, page + 1]);
+const pages = [...window].filter((n) => n >= 1 && n <= pageCount).sort((a, b) => a - b);
+---
+
+{!hidden && (
+<nav class="pagination" aria-label="Pagination">
+  {page > 1 && <a class="chip" href={link(page - 1)} rel="prev">Previous</a>}
+
+  <ul class="list-plain pages">
+    {pages.map((n, i) => (
+      <>
+        {i > 0 && pages[i - 1]! < n - 1 && <li class="gap" aria-hidden="true">…</li>}
+        <li>
+          <a class="chip" href={link(n)} aria-current={n === page ? 'true' : undefined}
+             aria-label={`Page ${n}`}>{n}</a>
+        </li>
+      </>
+    ))}
+  </ul>
+
+  {page < pageCount && <a class="chip" href={link(page + 1)} rel="next">Next</a>}
+</nav>
+)}
+
+<style>
+  .pagination {
+    display: flex; align-items: center; justify-content: center;
+    gap: var(--pp-space-2); flex-wrap: wrap;
+    margin-top: var(--pp-space-6);
+  }
+  .pages { display: flex; gap: var(--pp-space-2); align-items: center; }
+  .pages .chip { min-width: 40px; justify-content: center; }
+  .gap { color: var(--pp-muted); padding-inline: var(--pp-space-1); }
+</style>

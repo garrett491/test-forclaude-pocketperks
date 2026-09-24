@@ -1,0 +1,289 @@
+---
+import Base from '../layouts/Base.astro';
+import DealCard from '../components/DealCard.astro';
+import EmptyState from '../components/EmptyState.astro';
+import Pagination from '../components/Pagination.astro';
+import MerchantCard from '../components/MerchantCard.astro';
+import { resolveTownContext, townFilter, withTown } from '../lib/location';
+import {
+  listDealsGrouped, getCategoriesWithCounts, getTowns, getSiteChrome,
+  listMerchantsWithoutLiveDeals, PAGE_SIZE, CACHE_PUBLIC,
+} from '../lib/queries';
+
+Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
+
+const params = Astro.url.searchParams;
+const categorySlug = params.get('category') ?? undefined;
+// townSlug is resolved below from URL, cookie and default together.
+const query = params.get('q') ?? undefined;
+const featuredOnly = params.get('featured') === '1';
+const endingSoon = params.get('ending') === '1';
+const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
+
+const towns = await getTowns();
+const townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
+const townSlug = townFilter(townContext);
+if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
+
+const [{ blocks }, categories, results, quietMerchants] = await Promise.all([
+  getSiteChrome(),
+  getCategoriesWithCounts(townSlug),
+  listDealsGrouped({ categorySlug, townSlug, query, featuredOnly, endingSoon, page, pageSize: PAGE_SIZE }),
+  // Businesses with nothing running. Only on the first page, and never while
+  // searching or filtering by featured/ending — in those cases the visitor
+  // asked a specific question and padding the answer is noise.
+  page === 1 && !query && !featuredOnly && !endingSoon
+    ? listMerchantsWithoutLiveDeals({ townSlug, categorySlug })
+    : Promise.resolve([]),
+]);
+
+/**
+ * Only categories that actually contain a live deal are offered.
+ * A filter chip that leads to an empty page is a broken promise, and with a
+ * handful of merchants most categories are empty.
+ */
+const usableCategories = categories.filter((c) => c.deal_count > 0 || c.slug === categorySlug);
+const activeCategory = categories.find((c) => c.slug === categorySlug);
+const activeTown = townContext.showingAll ? null : townContext.town;
+
+const titleParts = [
+  activeCategory ? `${activeCategory.name} Deals` : 'All Local Deals',
+  activeTown ? `in ${activeTown.name}, ${activeTown.state_code}` : '',
+].filter(Boolean);
+const pageTitle = query ? `Search: ${query}` : titleParts.join(' ');
+
+function buildUrl(patch: Record<string, string | null>) {
+  const url = new URL(Astro.url);
+  url.searchParams.delete('page');
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) url.searchParams.delete(k);
+    else url.searchParams.set(k, v);
+  }
+  return url.pathname + url.search;
+}
+
+const activeFilters = [
+  activeCategory && { label: activeCategory.name, clear: buildUrl({ category: null }) },
+  activeTown && { label: activeTown.name, clear: buildUrl({ town: null }) },
+  featuredOnly && { label: 'Featured only', clear: buildUrl({ featured: null }) },
+  endingSoon && { label: 'Ending soon', clear: buildUrl({ ending: null }) },
+  query && { label: `“${query}”`, clear: buildUrl({ q: null }) },
+].filter(Boolean) as { label: string; clear: string }[];
+
+const filtersActive = activeFilters.length > 0;
+
+
+---
+
+<Base
+  title={pageTitle}
+  description={
+    activeCategory?.seo_description ??
+    `Browse current ${activeCategory ? activeCategory.name.toLowerCase() + ' ' : ''}deals and coupons from local businesses. Updated as merchants add them.`
+  }
+  canonicalPath={categorySlug ? `/deals?category=${categorySlug}` : '/deals'}
+  noindex={!!query || page > 1}
+  breadcrumbs={[
+    { name: 'Home', href: '/' },
+    { name: 'Deals', href: '/deals' },
+    ...(activeCategory ? [{ name: activeCategory.name, href: `/deals?category=${activeCategory.slug}` }] : []),
+  ]}
+>
+  <div class="wrap section">
+    <header class="page-head">
+      <h1>{pageTitle}</h1>
+      <p class="muted" data-result-count>
+        {results.total} {results.total === 1 ? 'business' : 'businesses'} with deals
+        {query && <> matching “{query}”</>}
+      </p>
+    </header>
+
+    {/*
+      Location filtering is stated, never silent. A visitor who does not
+      realise a town filter is on would read a short list as "Pocket Perks
+      has almost nothing" rather than "this town has almost nothing".
+    */}
+    {towns.length > 1 && (
+      <div class="town-banner">
+        <span class="tb-text">
+          {townContext.showingAll
+            ? 'Showing every town'
+            : <>Showing <strong>{townContext.town?.name}</strong>{townContext.isDefault && ' — not your town?'}</>}
+        </span>
+        <div class="tb-actions">
+          <button class="tb-change" type="button" data-town-open>Change town</button>
+          {!townContext.showingAll && (
+            <a class="tb-all" href={withTown(Astro.url, null)}>See every town</a>
+          )}
+        </div>
+      </div>
+    )}
+
+    <form class="search-row" action="/deals" method="get" role="search">
+      <label class="sr-only" for="deal-q">Search deals</label>
+      <input
+        class="input" id="deal-q" name="q" type="search" value={query ?? ''}
+        placeholder="Deal, business, town, phone…" autocomplete="off"
+        data-server-search data-target="#deal-results"
+      />
+      {categorySlug && <input type="hidden" name="category" value={categorySlug} />}
+      <button class="btn btn-primary" type="submit">Search</button>
+    </form>
+
+    {/*
+      Filters are links, not JavaScript. Each combination gets a real URL,
+      so a filtered view is shareable, bookmarkable, back-button friendly,
+      and works before any script has run.
+    */}
+    {/*
+      Active filters, stated plainly and individually removable.
+      Filters persisting across clicks is correct behaviour, but invisible
+      persistence is what made an empty result look like a broken site. The
+      fix is to show what is on, not to stop persisting.
+    */}
+    {filtersActive && (
+      <div class="active-filters" role="status">
+        <span class="af-label">
+          {activeFilters.length} {activeFilters.length === 1 ? 'filter' : 'filters'} on:
+        </span>
+        <ul class="af-list list-plain">
+          {activeFilters.map((f) => (
+            <li>
+              <a class="af-chip" href={f.clear}>
+                {f.label}<span class="af-x" aria-hidden="true">×</span>
+                <span class="sr-only">Remove this filter</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+        <a class="af-clear" href="/deals">Clear all</a>
+      </div>
+    )}
+
+    <div class="filters" id="categories" data-hide-on-search>
+      <div class="chip-row" role="list" aria-label="Filter by category">
+        <a class="chip" role="listitem" href={buildUrl({ category: null })}
+           aria-current={!categorySlug ? 'true' : undefined}>All</a>
+        {usableCategories.map((c) => (
+          <a class="chip" role="listitem" href={buildUrl({ category: c.slug })}
+             aria-current={categorySlug === c.slug ? 'true' : undefined}>
+            {c.name}<span class="chip-count">{c.deal_count}</span>
+          </a>
+        ))}
+      </div>
+
+      <div class="chip-row" role="list" aria-label="Refine">
+        <a class="chip" role="listitem" href={buildUrl({ featured: featuredOnly ? null : '1' })}
+           aria-current={featuredOnly ? 'true' : undefined}>Featured</a>
+        <a class="chip" role="listitem" href={buildUrl({ ending: endingSoon ? null : '1' })}
+           aria-current={endingSoon ? 'true' : undefined}>Ending soon</a>
+        {/* Town only appears once there is more than one to choose between. */}
+        {towns.length > 1 && towns.map((t) => (
+          <a class="chip" role="listitem" href={buildUrl({ town: townSlug === t.slug ? null : t.slug })}
+             aria-current={townSlug === t.slug ? 'true' : undefined}>{t.name}</a>
+        ))}
+      </div>
+    </div>
+
+    {results.items.length > 0 ? (
+      <>
+        <div class="grid" id="deal-results">
+          {results.items.map((deal, i) => <DealCard deal={deal} priority={i < 3} />)}
+        </div>
+        <Pagination page={results.page} pageCount={results.pageCount} baseUrl={Astro.url} />
+      </>
+    ) : (
+      <EmptyState block={query ? blocks['empty.no_search_results'] : blocks['empty.no_deals']} />
+    )}
+
+    {quietMerchants.length > 0 && (
+      <section class="quiet" aria-labelledby="quiet-title" data-hide-on-search>
+        <div class="section-head">
+          <h2 id="quiet-title">Also on Pocket Perks</h2>
+        </div>
+        <p class="quiet-note">
+          These businesses are listed but have nothing running today. Their
+          hours, phone and directions are still here.
+        </p>
+        <div class="grid">
+          {quietMerchants.map((m) => (
+            <MerchantCard merchant={m} note="No deals right now — check back soon" />
+          ))}
+        </div>
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .page-head { margin-bottom: var(--pp-space-4); }
+  .page-head h1 { margin-bottom: var(--pp-space-1); }
+  .page-head p { margin: 0; font-size: var(--pp-text-sm); font-variant-numeric: tabular-nums; }
+
+.town-banner {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--pp-space-3); flex-wrap: wrap;
+    padding: var(--pp-space-3) var(--pp-space-4);
+    margin-bottom: var(--pp-space-4);
+    background: var(--pp-surface);
+    border: 1px solid var(--pp-line);
+    border-left: var(--pp-stitch);
+    border-radius: var(--pp-radius-inset);
+    font-size: var(--pp-text-sm);
+  }
+  .tb-text strong { color: var(--pp-link); }
+  .tb-actions { display: flex; gap: var(--pp-space-2); align-items: center; flex-wrap: wrap; }
+  .tb-change {
+    min-height: 38px; padding-inline: var(--pp-space-4);
+    background: var(--pp-action-bg); color: var(--pp-action-text);
+    border: 0; border-radius: var(--pp-radius-chip);
+    font-size: var(--pp-text-xs); font-weight: 700; cursor: pointer;
+  }
+  .tb-change:hover { background: color-mix(in srgb, var(--pp-action-bg) 88%, black); }
+  .tb-all {
+    min-height: 38px; display: inline-flex; align-items: center;
+    font-size: var(--pp-text-xs); font-weight: 700;
+  }
+  @media (max-width: 30rem) {
+    .town-banner { flex-direction: column; align-items: flex-start; }
+    .tb-actions { width: 100%; }
+    .tb-change { flex: 1; }
+  }
+
+  .search-row { display: flex; gap: var(--pp-space-2); margin-bottom: var(--pp-space-4); }
+  .search-row .input { flex: 1; min-width: 0; }
+
+  .filters { display: flex; flex-direction: column; gap: var(--pp-space-3); margin-bottom: var(--pp-space-5); }
+  .active-filters {
+    display: flex; align-items: center; gap: var(--pp-space-3);
+    flex-wrap: wrap;
+    padding: var(--pp-space-3) var(--pp-space-4);
+    margin-bottom: var(--pp-space-4);
+    background: var(--pp-lime-100);
+    border-left: var(--pp-stitch);
+    border-radius: var(--pp-radius-inset);
+    font-size: var(--pp-text-sm);
+  }
+  .af-label { font-weight: 700; color: var(--pp-green); }
+  .af-list { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; }
+  .af-chip {
+    display: inline-flex; align-items: center; gap: var(--pp-space-2);
+    min-height: 34px; padding: 0.2rem 0.7rem;
+    background: var(--pp-surface); color: var(--pp-text);
+    border: 1px solid var(--pp-line-strong);
+    border-radius: var(--pp-radius-chip);
+    text-decoration: none; font-weight: 600;
+  }
+  .af-chip:hover { border-color: var(--pp-danger); color: var(--pp-danger); }
+  .af-x { font-size: 1.05em; line-height: 1; opacity: 0.7; }
+  .af-clear { margin-left: auto; font-weight: 700; white-space: nowrap; }
+
+  .quiet { margin-top: var(--pp-space-8); padding-top: var(--pp-space-5); border-top: 1px solid var(--pp-line); }
+  .quiet-note { color: var(--pp-muted); font-size: var(--pp-text-sm); margin-bottom: var(--pp-space-4); }
+  .search-empty {
+    grid-column: 1 / -1; text-align: center; color: var(--pp-muted);
+    padding: var(--pp-space-7) var(--pp-space-4);
+    border: 1px dashed var(--pp-line-strong); border-radius: var(--pp-radius-card);
+    background: var(--pp-surface);
+  }
+</style>

@@ -1,0 +1,24 @@
+{
+  "name": "pocket-perks",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "qa": "node supabase/tests/browser-qa.mjs"
+  },
+  "dependencies": {
+    "@astrojs/netlify": "^6.5.14",
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.58.0",
+    "astro": "^5.14.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "jsdom": "^27.0.0",
+    "typescript": "^5.9.3"
+  }
+}

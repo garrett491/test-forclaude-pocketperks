@@ -1,0 +1,117 @@
+---
+import type { NavItem, ContentBlock, SiteSettings, Town } from '../lib/types';
+import type { Branding } from '../lib/branding';
+import type { TownContext } from '../lib/location';
+import LocationPicker from './LocationPicker.astro';
+
+interface Props {
+  nav: NavItem[];
+  settings: SiteSettings;
+  blocks: Record<string, ContentBlock>;
+  branding: Branding;
+  towns: Town[];
+  townContext: TownContext;
+}
+const { nav, blocks, branding, towns, townContext } = Astro.props;
+
+const headerNav = nav.filter((n) => n.location === 'header');
+const path = Astro.url.pathname;
+
+const announcement = blocks['site.announcement'];
+const announceText = announcement?.payload?.text as string | undefined;
+const announceHref = announcement?.payload?.href as string | undefined;
+
+const showPicker = towns.length > 1;
+---
+
+{announceText && (
+  <div class="announce">
+    <div class="wrap announce-inner">
+      {announceHref
+        ? <a href={announceHref}>{announceText}</a>
+        : <span>{announceText}</span>}
+    </div>
+  </div>
+)}
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a href="/" class="brand" aria-label="Pocket Perks, home">
+      <img src={branding.logo} alt="" width="150" height="34" fetchpriority="high" />
+    </a>
+
+    <nav aria-label="Main">
+      <ul class="nav-list list-plain">
+        {headerNav.map((item) => (
+          <li>
+            <a
+              href={item.href}
+              aria-current={path === item.href ? 'page' : undefined}
+              target={item.opens_new_tab ? '_blank' : undefined}
+              rel={item.opens_new_tab ? 'noopener noreferrer' : undefined}
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+
+    {showPicker ? (
+      <LocationPicker context={townContext} variant="header" />
+    ) : (
+      <a href="/deals" class="btn btn-primary btn-sm header-cta">Find a deal</a>
+    )}
+  </div>
+</header>
+
+<style>
+  /* The announcement bar is content, so it is editable and schedulable from
+     the dashboard rather than hardcoded. It renders only when there is
+     something to say — an empty bar is worse than no bar. */
+  .announce {
+    background: var(--pp-footer-bg);
+    color: var(--pp-footer-text);
+    font-size: var(--pp-text-sm);
+    text-align: center;
+  }
+  .announce-inner { padding-block: var(--pp-space-2); }
+  .announce a { color: var(--pp-lime-300); font-weight: 600; }
+
+  .site-header {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--pp-header-bg) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--pp-line);
+  }
+  .header-inner {
+    display: flex; align-items: center; gap: var(--pp-space-4);
+    min-height: 60px;
+  }
+  .brand { flex-shrink: 0; display: flex; align-items: center; }
+  .brand img { width: auto; height: 30px; max-width: 170px; object-fit: contain; }
+
+  nav { flex: 1; min-width: 0; }
+  .nav-list { display: flex; gap: var(--pp-space-1); overflow-x: auto; scrollbar-width: none; }
+  .nav-list::-webkit-scrollbar { display: none; }
+  .nav-list a {
+    display: inline-flex; align-items: center;
+    min-height: var(--pp-tap-min);
+    padding-inline: var(--pp-space-3);
+    border-radius: var(--pp-radius-inset);
+    color: var(--pp-header-text); text-decoration: none;
+    font-size: var(--pp-text-sm); font-weight: 600; white-space: nowrap;
+  }
+  .nav-list a:hover { background: var(--pp-deep-050); color: var(--pp-link); }
+  .nav-list a[aria-current='page'] {
+    color: var(--pp-link);
+    box-shadow: inset 0 -2px 0 var(--pp-accent);
+    border-radius: 0;
+  }
+
+  /* Below 30rem the header needs three rows to fit everything. The CTA drops
+     because the nav already leads to the same place. */
+  @media (max-width: 30rem) {
+    .header-inner { gap: var(--pp-space-2); }
+    .brand img { height: 26px; max-width: 120px; }
+    .header-cta { display: none; }
+  }
+</style>

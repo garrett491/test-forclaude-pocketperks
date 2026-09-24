@@ -1,0 +1,165 @@
+---
+import Base from '../layouts/Base.astro';
+import { getSiteChrome, listMerchants, CACHE_STATIC } from '../lib/queries';
+import MerchantLeadForm from '../components/MerchantLeadForm.astro';
+
+Astro.response.headers.set('Cache-Control', CACHE_STATIC);
+const [{ settings }, merchants] = await Promise.all([getSiteChrome(), listMerchants({ pageSize: 1 })]);
+const email = settings['contact.email'] as string | undefined;
+
+/**
+ * The merchant sales page.
+ *
+ * "List your business" used to sit in the primary consumer navigation — the
+ * most valuable position on the site, speaking to roughly one visitor in a
+ * hundred. It lives here now, linked from the footer, where the merchants
+ * who go looking for it will find it.
+ *
+ * Plan features are described exactly as the database enforces them. If the
+ * plan sheet and the software ever disagree again, that is a bug.
+ */
+const plans = [
+  { name: 'Standard', price: '$59', per: 'per month', features: [
+      'Business profile page with hours, phone, address and directions',
+      'Up to 2 live deals at a time',
+      'Photo on every deal card',
+      'Listed in search and category browsing',
+      'Shareable link for each deal',
+    ], highlight: false },
+  { name: 'Pro', price: '$89', per: 'per month', features: [
+      'Everything in Standard',
+      'Up to 3 live deals at a time',
+      'Tagline on your profile and cards',
+      'Shown in "More local businesses" on other profiles',
+      'Included in the weekly email',
+      'Social media links on your profile',
+    ], highlight: true },
+  { name: 'Premium', price: '$119', per: 'per month', features: [
+      'Everything in Pro',
+      'Featured badge on your deals',
+      'Placement in the homepage featured row',
+      'Priority position in browsing',
+      'Top placement in the weekly email',
+    ], highlight: false },
+];
+---
+
+<Base
+  title="Advertise on Pocket Perks"
+  description="Put your business in front of local customers looking for a deal. Plans start at $59 a month, with a monthly report showing exactly what you got."
+  canonicalPath="/for-business"
+  breadcrumbs={[{ name: 'Home', href: '/' }, { name: 'For businesses', href: '/for-business' }]}
+>
+  <header class="fb-head">
+    <div class="wrap">
+      <h1>Get in front of local customers</h1>
+      <p class="lede">
+        Pocket Perks is where people around here look for a deal. Put your offer
+        on it, and every month we send you a plain report of what actually
+        happened: how many people saw it, how many tapped Call, how many asked
+        for directions.
+      </p>
+      <div class="row">
+        <a class="btn btn-primary" href="#enquiry">Get started</a>
+        <a class="btn btn-outline" href="/businesses">See who's on it</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap section">
+    <div class="plans">
+      {plans.map((plan) => (
+        <article class={`plan card ${plan.highlight ? 'is-highlight' : ''}`}>
+          <h2>{plan.name}</h2>
+          <p class="price"><strong>{plan.price}</strong> <span>{plan.per}</span></p>
+          <ul class="list-plain features">
+            {plan.features.map((f) => <li>{f}</li>)}
+          </ul>
+        </article>
+      ))}
+    </div>
+
+    {/*
+      What the reporting can and cannot prove, stated plainly. A merchant who
+      is told "we sent you 47 customers" will check their own till and stop
+      believing anything else on the page.
+    */}
+    <section class="honesty" aria-labelledby="honesty-title">
+      <h2 id="honesty-title">What we can and can't measure</h2>
+      <div class="honesty-grid">
+        <div>
+          <h3>We can show you</h3>
+          <ul class="list-plain">
+            <li>How many times your deal appeared on someone's screen</li>
+            <li>How many people opened your profile or your offer</li>
+            <li>How many tapped Call, Directions or your website link</li>
+            <li>How many copied your coupon code</li>
+          </ul>
+        </div>
+        <div>
+          <h3>We can't show you</h3>
+          <ul class="list-plain">
+            <li>Whether someone walked through your door</li>
+            <li>What they spent once they did</li>
+          </ul>
+          <p class="note">
+            A tap on Call is a person choosing to ring you. It isn't a sale, and
+            we won't count it as one.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-foot" aria-labelledby="enquiry-title">
+      <h2 id="enquiry-title">Want to be on it?</h2>
+      <p>
+        {merchants.total} {merchants.total === 1 ? 'business is' : 'businesses are'} listed.
+        Tell us about yours and we'll set the listing up for you — you don't have
+        to build anything.
+      </p>
+      <MerchantLeadForm />
+      {email && <p class="or-email">Or email <a href={`mailto:${email}?subject=Pocket%20Perks%20listing`}>{email}</a>.</p>}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .fb-head { background: var(--pp-deep); color: var(--pp-white); padding-block: var(--pp-space-7); border-bottom: var(--pp-stitch); }
+  .fb-head h1 { color: var(--pp-white); }
+  .lede { color: rgba(255,255,255,0.86); font-size: var(--pp-text-lg); margin-bottom: var(--pp-space-5); }
+  .fb-head :global(.btn-outline) { background: transparent; color: var(--pp-white); border-color: rgba(255,255,255,0.35); }
+  .fb-head :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+
+  .plans { display: grid; gap: var(--pp-space-4); grid-template-columns: 1fr; }
+  @media (min-width: 48rem) { .plans { grid-template-columns: repeat(3, 1fr); } }
+  .plan { padding: var(--pp-space-5); gap: var(--pp-space-3); }
+  /* The recommended plan is marked by the stitch, not by a different colour. */
+  .plan.is-highlight { border-left: var(--pp-stitch); box-shadow: var(--pp-shadow-lift); }
+  .plan h2 { font-size: var(--pp-text-xl); margin: 0; }
+  .price { margin: 0; }
+  .price strong { font-family: var(--pp-font-display); font-size: var(--pp-text-2xl); color: var(--pp-green); }
+  .price span { color: var(--pp-muted); font-size: var(--pp-text-sm); }
+  .features { display: flex; flex-direction: column; gap: var(--pp-space-2); font-size: var(--pp-text-sm); }
+  .features li { padding-left: 1.4em; position: relative; }
+  .features li::before {
+    content: ''; position: absolute; left: 0; top: 0.55em;
+    width: 8px; height: 8px; border-radius: 50%; background: var(--pp-lime);
+  }
+
+  .honesty { margin-top: var(--pp-space-7); }
+  .honesty-grid { display: grid; gap: var(--pp-space-5); grid-template-columns: 1fr; }
+  @media (min-width: 40rem) { .honesty-grid { grid-template-columns: 1fr 1fr; } }
+  .honesty h3 { font-size: var(--pp-text-lg); }
+  .honesty ul { display: flex; flex-direction: column; gap: var(--pp-space-2); font-size: var(--pp-text-sm); }
+  .honesty li { padding-left: 1.2em; position: relative; color: var(--pp-muted); }
+  .honesty li::before { content: '·'; position: absolute; left: 0.3em; color: var(--pp-lime); font-weight: 700; }
+  .note { font-size: var(--pp-text-sm); color: var(--pp-muted); margin-top: var(--pp-space-3); }
+
+  .cta-foot {
+    margin-top: var(--pp-space-7); padding: var(--pp-space-6);
+    background: var(--pp-surface); border: 1px solid var(--pp-line);
+    border-left: var(--pp-stitch); border-radius: var(--pp-radius-card);
+  }
+  .cta-foot p { color: var(--pp-muted); }
+  .or-email { margin-top: var(--pp-space-4); font-size: var(--pp-text-sm); }
+</style>

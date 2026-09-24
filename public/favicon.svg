@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Pocket Perks">
+  <rect width="64" height="64" rx="14" fill="#093814"/>
+  <path d="M16 18h32v20L32 52 16 38z" fill="#0C4A1A" stroke="#56A837" stroke-width="2"
+        stroke-dasharray="4 3" stroke-linejoin="round"/>
+  <path d="M32 26l3.1 6.3 7 1-5 4.9 1.2 6.9-6.3-3.3-6.3 3.3 1.2-6.9-5-4.9 7-1z" fill="#fff"/>
+</svg>

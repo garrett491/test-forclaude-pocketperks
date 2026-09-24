@@ -1,0 +1,423 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { str, bool, int, timestamp, toLocalInput, humanError } from '../../lib/admin';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+let error: string | null = null;
+let success: string | null = null;
+
+/**
+ * Everything on this page is text that used to be hardcoded in the HTML.
+ * The whole point of the rebuild is that changing the hero headline, the
+ * footer links or the empty-state wording never requires opening an editor.
+ */
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? '');
+
+  if (intent === 'block') {
+    const key = str(form, 'block_key');
+    const type = str(form, 'block_type');
+    const payload: Record<string, string> = {};
+    for (const [name, val] of form.entries()) {
+      if (name.startsWith('payload.') && typeof val === 'string') {
+        payload[name.slice(8)] = val.trim();
+      }
+    }
+
+    // how_it_works stores an array, so its three steps are rebuilt rather
+    // than stored as flat keys.
+    let finalPayload: Record<string, unknown> = payload;
+    if (type === 'how_it_works') {
+      const steps = [0, 1, 2]
+        .map((i) => ({ title: payload[`step${i}_title`] ?? '', body: payload[`step${i}_body`] ?? '' }))
+        .filter((s) => s.title || s.body);
+      finalPayload = { steps };
+    }
+
+    const { error: blockError } = await db
+      .from('content_blocks')
+      .update({
+        payload: finalPayload,
+        is_active: bool(form, 'is_active'),
+        starts_at: timestamp(form, 'starts_at'),
+        ends_at: timestamp(form, 'ends_at'),
+      })
+      .eq('block_key', key);
+
+    if (blockError) error = humanError(blockError);
+    else success = 'Content saved.';
+  }
+
+  if (intent === 'announcement') {
+    const text = str(form, 'text');
+    const href = str(form, 'href');
+    const active = bool(form, 'is_active');
+
+    const { data: existing } = await db
+      .from('content_blocks').select('id').eq('block_key', 'site.announcement').maybeSingle();
+
+    const record = {
+      block_key: 'site.announcement',
+      block_type: 'announcement',
+      title: 'Announcement bar',
+      payload: { text: text ?? '', href: href ?? '' },
+      is_active: active && !!text,
+      starts_at: timestamp(form, 'starts_at'),
+      ends_at: timestamp(form, 'ends_at'),
+      sort_order: 0,
+    };
+
+    const { error: annError } = existing
+      ? await db.from('content_blocks').update(record).eq('id', existing.id)
+      : await db.from('content_blocks').insert(record);
+
+    if (annError) error = humanError(annError);
+    else success = active && text ? 'Announcement bar is live.' : 'Announcement bar is off.';
+  }
+
+  if (intent === 'nav') {
+    const id = str(form, 'nav_id');
+    const action = String(form.get('nav_action') ?? 'update');
+
+    if (action === 'delete' && id) {
+      const { error: navError } = await db.from('nav_items').delete().eq('id', id);
+      // System links raise a trigger error with a message written for a human.
+      if (navError) error = humanError(navError);
+      else success = 'Link removed.';
+    } else if (action === 'create') {
+      const label = str(form, 'label');
+      const href = str(form, 'href');
+      if (!label || !href) error = 'A link needs both a label and an address.';
+      else {
+        const { error: navError } = await db.from('nav_items').insert({
+          location: String(form.get('location') ?? 'footer'),
+          section: str(form, 'section'),
+          label, href,
+          sort_order: int(form, 'sort_order', 50),
+          opens_new_tab: bool(form, 'opens_new_tab'),
+        });
+        if (navError) error = humanError(navError);
+        else success = 'Link added.';
+      }
+    } else if (id) {
+      const { error: navError } = await db.from('nav_items').update({
+        label: str(form, 'label'),
+        href: str(form, 'href'),
+        section: str(form, 'section'),
+        sort_order: int(form, 'sort_order'),
+        is_active: bool(form, 'is_active'),
+      }).eq('id', id);
+      if (navError) error = humanError(navError);
+      else success = 'Link saved.';
+    }
+  }
+}
+
+const [{ data: blockRows }, { data: navRows }] = await Promise.all([
+  db.from('content_blocks').select('*').order('sort_order'),
+  db.from('nav_items').select('*').order('location').order('sort_order'),
+]);
+
+const blocks = (blockRows ?? []) as any[];
+const nav = (navRows ?? []) as any[];
+const byKey = (key: string) => blocks.find((b) => b.block_key === key);
+
+const hero = byKey('home.hero');
+const how = byKey('home.how_it_works');
+const newsletter = byKey('home.newsletter');
+const announcement = byKey('site.announcement');
+const emptyStates = blocks.filter((b) => b.block_type === 'empty_state');
+
+const p = (block: any, key: string) => block?.payload?.[key] ?? '';
+const steps = how?.payload?.steps ?? [];
+---
+
+<Admin title="Site content" profile={profile}>
+  {success && <p class="form-success" role="status">{success}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  <p class="help">
+    Everything on this page is wording that appears on the public site. Changes
+    show up within about five minutes — you do not need to redeploy anything.
+  </p>
+
+  <section class="panel">
+    <h2>Homepage hero</h2>
+    <p class="panel-hint">The first thing a visitor reads.</p>
+    <form method="post" class="stack">
+      <input type="hidden" name="intent" value="block" />
+      <input type="hidden" name="block_key" value="home.hero" />
+      <input type="hidden" name="block_type" value="hero" />
+      <div class="form-grid cols-2">
+        <div class="field span-2">
+          <label for="hero-headline">Headline</label>
+          <input class="input" id="hero-headline" name="payload.headline" value={p(hero, 'headline')} />
+        </div>
+        <div class="field span-2">
+          <label for="hero-sub">Subheadline</label>
+          <input class="input" id="hero-sub" name="payload.subheadline" value={p(hero, 'subheadline')} />
+        </div>
+        <div class="field">
+          <label for="hero-cta1">Main button text</label>
+          <input class="input" id="hero-cta1" name="payload.primary_cta_label" value={p(hero, 'primary_cta_label')} />
+        </div>
+        <div class="field">
+          <label for="hero-cta1h">Main button link</label>
+          <input class="input" id="hero-cta1h" name="payload.primary_cta_href" value={p(hero, 'primary_cta_href')} />
+        </div>
+        <div class="field">
+          <label for="hero-cta2">Second button text</label>
+          <input class="input" id="hero-cta2" name="payload.secondary_cta_label" value={p(hero, 'secondary_cta_label')} />
+        </div>
+        <div class="field">
+          <label for="hero-cta2h">Second button link</label>
+          <input class="input" id="hero-cta2h" name="payload.secondary_cta_href" value={p(hero, 'secondary_cta_href')} />
+        </div>
+      </div>
+      <input type="hidden" name="is_active" value="on" />
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Save hero</button></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Announcement bar</h2>
+    <p class="panel-hint">
+      A thin strip above the header. Leave the text blank to hide it. Set dates
+      to have it appear and disappear on its own.
+    </p>
+    <form method="post" class="stack">
+      <input type="hidden" name="intent" value="announcement" />
+      <div class="form-grid cols-2">
+        <div class="field span-2">
+          <label for="ann-text">Message</label>
+          <input class="input" id="ann-text" name="text" maxlength="120"
+                 value={p(announcement, 'text')} placeholder="New deals added this week" />
+        </div>
+        <div class="field span-2">
+          <label for="ann-href">Link (optional)</label>
+          <input class="input" id="ann-href" name="href" value={p(announcement, 'href')} placeholder="/deals" />
+        </div>
+        <div class="field">
+          <label for="ann-start">Show from</label>
+          <input class="input" id="ann-start" name="starts_at" type="datetime-local"
+                 value={toLocalInput(announcement?.starts_at)} />
+        </div>
+        <div class="field">
+          <label for="ann-end">Hide after</label>
+          <input class="input" id="ann-end" name="ends_at" type="datetime-local"
+                 value={toLocalInput(announcement?.ends_at)} />
+        </div>
+        <div class="field span-2">
+          <label class="switch">
+            <input type="checkbox" name="is_active" checked={announcement?.is_active ?? false} />
+            <span>Show the announcement bar</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Save announcement</button></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>How it works</h2>
+    <p class="panel-hint">Three steps on the homepage.</p>
+    <form method="post" class="stack">
+      <input type="hidden" name="intent" value="block" />
+      <input type="hidden" name="block_key" value="home.how_it_works" />
+      <input type="hidden" name="block_type" value="how_it_works" />
+      <div class="form-grid cols-2">
+        {[0, 1, 2].map((i) => (
+          <>
+            <div class="field">
+              <label for={`step${i}t`}>Step {i + 1} title</label>
+              <input class="input" id={`step${i}t`} name={`payload.step${i}_title`}
+                     value={steps[i]?.title ?? ''} />
+            </div>
+            <div class="field">
+              <label for={`step${i}b`}>Step {i + 1} text</label>
+              <input class="input" id={`step${i}b`} name={`payload.step${i}_body`}
+                     value={steps[i]?.body ?? ''} />
+            </div>
+          </>
+        ))}
+      </div>
+      <div class="field">
+        <label class="switch">
+          <input type="checkbox" name="is_active" checked={how?.is_active ?? true} />
+          <span>Show this section</span>
+        </label>
+      </div>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Save steps</button></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Newsletter wording</h2>
+    <p class="panel-hint">Used on the homepage and in the footer.</p>
+    <form method="post" class="stack">
+      <input type="hidden" name="intent" value="block" />
+      <input type="hidden" name="block_key" value="home.newsletter" />
+      <input type="hidden" name="block_type" value="newsletter" />
+      <div class="form-grid cols-2">
+        <div class="field span-2">
+          <label for="nl-h">Headline</label>
+          <input class="input" id="nl-h" name="payload.headline" value={p(newsletter, 'headline')} />
+        </div>
+        <div class="field span-2">
+          <label for="nl-b">Supporting line</label>
+          <input class="input" id="nl-b" name="payload.body" value={p(newsletter, 'body')} />
+        </div>
+        <div class="field">
+          <label for="nl-c">Button text</label>
+          <input class="input" id="nl-c" name="payload.cta_label" value={p(newsletter, 'cta_label')} />
+        </div>
+        <div class="field">
+          <label for="nl-f">Small print</label>
+          <input class="input" id="nl-f" name="payload.fine_print" value={p(newsletter, 'fine_print')} />
+        </div>
+      </div>
+      <input type="hidden" name="is_active" value="on" />
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Save newsletter wording</button></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Empty states</h2>
+    <p class="panel-hint">
+      What people see when a filter or a search turns up nothing. Each one should
+      offer somewhere to go next.
+    </p>
+    {emptyStates.map((block) => (
+      <form method="post" class="stack empty-form">
+        <input type="hidden" name="intent" value="block" />
+        <input type="hidden" name="block_key" value={block.block_key} />
+        <input type="hidden" name="block_type" value="empty_state" />
+        <input type="hidden" name="is_active" value="on" />
+        <h3>{block.title}</h3>
+        <div class="form-grid cols-2">
+          <div class="field span-2">
+            <label for={`${block.id}-h`}>Headline</label>
+            <input class="input" id={`${block.id}-h`} name="payload.headline" value={p(block, 'headline')} />
+          </div>
+          <div class="field span-2">
+            <label for={`${block.id}-b`}>Text</label>
+            <input class="input" id={`${block.id}-b`} name="payload.body" value={p(block, 'body')} />
+          </div>
+          <div class="field">
+            <label for={`${block.id}-c`}>Button text</label>
+            <input class="input" id={`${block.id}-c`} name="payload.cta_label" value={p(block, 'cta_label')} />
+          </div>
+          <div class="field">
+            <label for={`${block.id}-ch`}>Button link</label>
+            <input class="input" id={`${block.id}-ch`} name="payload.cta_href" value={p(block, 'cta_href')} />
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn btn-outline btn-sm" type="submit">Save</button></div>
+      </form>
+    ))}
+  </section>
+
+  <section class="panel">
+    <h2>Navigation and footer links</h2>
+    <p class="panel-hint">
+      Links must be a path starting with a slash, like /deals, or a full https
+      address. Required links can be switched off but not deleted.
+    </p>
+
+    <div class="table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th scope="col">Where</th><th scope="col">Group</th>
+            <th scope="col">Label</th><th scope="col">Link</th>
+            <th scope="col" class="num">Order</th><th scope="col">On</th><th scope="col"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {nav.map((item) => (
+            <tr>
+              <td>{item.location}</td>
+              <td>
+                <form method="post" class="inline-form" id={`nav-${item.id}`}>
+                  <input type="hidden" name="intent" value="nav" />
+                  <input type="hidden" name="nav_id" value={item.id} />
+                  <input class="input tiny" name="section" value={item.section ?? ''}
+                         aria-label={`Group for ${item.label}`} />
+                </form>
+              </td>
+              <td><input class="input tiny" form={`nav-${item.id}`} name="label" value={item.label}
+                         aria-label={`Label for ${item.label}`} /></td>
+              <td><input class="input tiny wide" form={`nav-${item.id}`} name="href" value={item.href}
+                         aria-label={`Link for ${item.label}`} /></td>
+              <td class="num"><input class="input tiny num-input" form={`nav-${item.id}`} name="sort_order"
+                         type="number" value={item.sort_order} aria-label={`Order for ${item.label}`} /></td>
+              <td>
+                <label class="switch">
+                  <input type="checkbox" form={`nav-${item.id}`} name="is_active" checked={item.is_active} />
+                  <span class="sr-only">Show {item.label}</span>
+                </label>
+              </td>
+              <td class="actions-cell">
+                <button class="btn btn-outline btn-sm" form={`nav-${item.id}`} type="submit">Save</button>
+                {!item.is_system && (
+                  <form method="post" class="inline-form" data-confirm-delete>
+                    <input type="hidden" name="intent" value="nav" />
+                    <input type="hidden" name="nav_action" value="delete" />
+                    <input type="hidden" name="nav_id" value={item.id} />
+                    <button class="btn btn-ghost btn-sm danger-text" type="submit">Remove</button>
+                  </form>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <form method="post" class="add-nav">
+      <input type="hidden" name="intent" value="nav" />
+      <input type="hidden" name="nav_action" value="create" />
+      <h3>Add a link</h3>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="new-loc">Where</label>
+          <select class="input" id="new-loc" name="location">
+            <option value="footer">Footer</option>
+            <option value="header">Header</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="new-sec">Footer group</label>
+          <input class="input" id="new-sec" name="section" placeholder="Browse" />
+        </div>
+        <div class="field">
+          <label for="new-label">Label</label>
+          <input class="input" id="new-label" name="label" required maxlength="40" />
+        </div>
+        <div class="field">
+          <label for="new-href">Link</label>
+          <input class="input" id="new-href" name="href" required placeholder="/deals" />
+        </div>
+      </div>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Add link</button></div>
+    </form>
+  </section>
+</Admin>
+
+<style>
+  .empty-form { padding-top: var(--pp-space-4); border-top: 1px solid var(--pp-line); margin-top: var(--pp-space-4); }
+  .empty-form h3 { font-size: var(--pp-text-base); margin: 0; }
+  .inline-form { display: inline; }
+  .input.tiny { min-height: 34px; padding: 0.2rem 0.55rem; border-radius: var(--pp-radius-inset); font-size: var(--pp-text-sm); min-width: 7rem; }
+  .input.tiny.wide { min-width: 12rem; }
+  .input.tiny.num-input { min-width: 4.5rem; text-align: right; }
+  .actions-cell { display: flex; gap: var(--pp-space-2); align-items: center; }
+  .danger-text { color: var(--pp-danger); }
+  .add-nav { margin-top: var(--pp-space-5); padding-top: var(--pp-space-4); border-top: 1px solid var(--pp-line); }
+  .add-nav h3 { font-size: var(--pp-text-base); margin-bottom: var(--pp-space-3); }
+</style>
+

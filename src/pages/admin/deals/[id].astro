@@ -1,0 +1,351 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { str, bool, int, timestamp, toLocalInput, humanError } from '../../../lib/admin';
+import ImageUpload from '../../../components/ImageUpload.astro';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+const { id } = Astro.params;
+const isNew = id === 'new';
+
+let error: string | null = null;
+let success: string | null = null;
+
+const [{ data: merchants }, { data: badges }] = await Promise.all([
+  db.from('merchants').select('id, name, tier, status').neq('status', 'archived').order('name'),
+  db.from('badges').select('id, label').eq('is_active', true).order('label'),
+]);
+
+const dealTypes = [
+  { key: 'percent_off', label: 'Percent off' },
+  { key: 'dollar_off', label: 'Dollar amount off' },
+  { key: 'bogo', label: 'Buy one get one' },
+  { key: 'freebie', label: 'Something free' },
+  { key: 'bundle', label: 'Bundle or combo' },
+  { key: 'special', label: 'General special' },
+  { key: 'other', label: 'Other' },
+];
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? 'save');
+
+  if (intent === 'duplicate' && !isNew) {
+    /**
+     * Re-running last month's offer should not mean retyping it. The copy
+     * lands as a Draft with the dates cleared, so it can never go live by
+     * accident with a stale end date attached.
+     */
+    const { data: original } = await db.from('deals').select('*').eq('id', id).maybeSingle();
+    if (original) {
+      const copy = { ...original };
+      delete (copy as any).id;
+      delete (copy as any).created_at;
+      delete (copy as any).updated_at;
+      copy.slug = null;
+      copy.headline = `${original.headline} (copy)`;
+      copy.status = 'draft';
+      copy.starts_at = null;
+      copy.ends_at = null;
+      copy.is_featured = false;
+
+      const { data: created, error: copyError } = await db
+        .from('deals').insert(copy).select('id').maybeSingle();
+      if (copyError) error = humanError(copyError);
+      else return Astro.redirect(
+        `/admin/deals/${created?.id}?saved=${encodeURIComponent('Copied. Set the dates and publish when you are ready.')}`, 302
+      );
+    } else {
+      error = 'That deal no longer exists.';
+    }
+  } else if (intent === 'archive' && !isNew) {
+    const { error: archiveError } = await db.from('deals').update({ status: 'archived' }).eq('id', id);
+    if (archiveError) error = humanError(archiveError);
+    else return Astro.redirect(
+      `/admin/deals?saved=${encodeURIComponent('Deal archived and removed from the site.')}`, 302
+    );
+  } else {
+    const merchantId = str(form, 'merchant_id');
+    const headline = str(form, 'headline');
+
+    if (!merchantId) error = 'Pick which business this deal belongs to.';
+    else if (!headline) error = 'Write a headline for the deal.';
+
+    if (!error) {
+      const payload = {
+        merchant_id: merchantId,
+        headline,
+        description: str(form, 'description'),
+        terms: str(form, 'terms'),
+        deal_type: String(form.get('deal_type') ?? 'special'),
+        coupon_code: str(form, 'coupon_code'),
+        badge_id: str(form, 'badge_id'),
+        starts_at: timestamp(form, 'starts_at'),
+        ends_at: timestamp(form, 'ends_at'),
+        is_featured: bool(form, 'is_featured'),
+        display_priority: int(form, 'display_priority'),
+        status: String(form.get('status') ?? 'draft'),
+        image_media_id: str(form, 'image_media_id'),
+      };
+
+      const imageId = str(form, 'image_media_id');
+      const imageAlt = str(form, 'image_media_id_alt');
+      if (imageId) await db.from('media').update({ alt_text: imageAlt ?? '' }).eq('id', imageId);
+
+      const result = isNew
+        ? await db.from('deals').insert(payload).select('id').maybeSingle()
+        : await db.from('deals').update(payload).eq('id', id).select('id').maybeSingle();
+
+      if (result.error) {
+        // The tier-limit trigger raises a message written for a human —
+        // "X is on the standard plan, which includes 2 active deal(s)."
+        // humanError passes those straight through.
+        error = humanError(result.error);
+      } else if (isNew) {
+        return Astro.redirect(
+          `/admin/deals/${result.data?.id}?saved=${encodeURIComponent('Deal created.')}`, 302
+        );
+      } else {
+        success = 'Saved.';
+      }
+    }
+  }
+}
+
+let deal: any = null;
+if (!isNew) {
+  const { data } = await db
+    .from('deals')
+    .select('*, merchant:merchants ( name, slug, tier ), image:media!deals_image_media_id_fkey ( id, bucket_id, storage_path, alt_text, width, height )')
+    .eq('id', id).maybeSingle();
+  if (!data) return Astro.rewrite('/404');
+  deal = data;
+}
+
+const flash = Astro.url.searchParams.get('saved');
+if (flash && !success) success = decodeURIComponent(flash);
+
+const preselect = Astro.url.searchParams.get('merchant');
+const value = <T,>(key: string, fallback: T | string = ''): T | string => deal?.[key] ?? fallback;
+
+/** What the public would actually see right now, given status and schedule. */
+function liveState(): { label: string; tone: 'ok' | 'warn' | 'off' } | null {
+  if (!deal) return null;
+  if (deal.status !== 'active') return { label: `Not showing — status is ${deal.status}`, tone: 'off' };
+  const now = Date.now();
+  if (deal.starts_at && new Date(deal.starts_at).getTime() > now)
+    return { label: `Scheduled — starts ${new Date(deal.starts_at).toLocaleString('en-US')}`, tone: 'warn' };
+  if (deal.ends_at && new Date(deal.ends_at).getTime() <= now)
+    return { label: 'Expired — the end date has passed, so it is off the site', tone: 'warn' };
+  return { label: 'Showing on the site now', tone: 'ok' };
+}
+const state = liveState();
+
+const selectedMerchant = (merchants ?? []).find(
+  (m: any) => m.id === (deal?.merchant_id ?? preselect)
+) as any;
+const cap = selectedMerchant?.tier === 'standard' ? 2 : 3;
+---
+
+<Admin title={isNew ? 'Add deal' : deal.headline} profile={profile}>
+  <div slot="actions" class="row">
+    <a class="btn btn-ghost btn-sm" href="/admin/deals">Back to list</a>
+    {!isNew && deal.merchant?.slug && (
+      <a class="btn btn-outline btn-sm" href={`/b/${deal.merchant.slug}/${deal.slug}`}
+         target="_blank" rel="noopener">View on site</a>
+    )}
+  </div>
+
+  {success && <p class="form-success" role="status">{success}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {state && (
+    <p class={`state-banner tone-${state.tone}`} role="status">{state.label}</p>
+  )}
+
+  <p class="help">
+    <strong>Draft</strong> keeps it hidden. <strong>Live</strong> publishes it, but it
+    only appears between the start and end dates you set below.
+    {selectedMerchant && <> This business is on the <strong>{selectedMerchant.tier}</strong> plan, which allows {cap} live deals at once.</>}
+  </p>
+
+  <form method="post" class="stack">
+    <input type="hidden" name="intent" value="save" />
+
+    <fieldset class="group">
+      <legend>The offer</legend>
+      <div class="form-grid cols-2">
+        <div class="field span-2">
+          <label for="merchant_id">Business <span class="req" aria-hidden="true">*</span></label>
+          <select class="input" id="merchant_id" name="merchant_id" required>
+            <option value="">Choose one</option>
+            {(merchants ?? []).map((m: any) => (
+              <option value={m.id} selected={(deal?.merchant_id ?? preselect) === m.id}>
+                {m.name} ({m.tier}{m.status !== 'active' ? `, ${m.status}` : ''})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div class="field span-2">
+          <label for="headline">Headline <span class="req" aria-hidden="true">*</span></label>
+          <input class="input" id="headline" name="headline" required minlength="3" maxlength="120"
+                 value={value('headline')} placeholder="$10 off any large pizza" />
+          <p class="hint">Say the saving plainly. This is the line people scan.</p>
+        </div>
+
+        <div class="field span-2">
+          <label for="description">Details</label>
+          <textarea class="input" id="description" name="description" maxlength="1000">{value('description')}</textarea>
+        </div>
+
+        <div class="field">
+          <label for="deal_type">Type of deal</label>
+          <select class="input" id="deal_type" name="deal_type">
+            {dealTypes.map((t) => (
+              <option value={t.key} selected={value('deal_type', 'special') === t.key}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="coupon_code">Coupon code</label>
+          <input class="input" id="coupon_code" name="coupon_code" maxlength="24"
+                 pattern="[A-Za-z0-9._-]{2,24}" value={value('coupon_code')} placeholder="PERKS10" />
+          <p class="hint">Optional. Letters, numbers, dots and dashes only.</p>
+        </div>
+
+        <div class="field span-2">
+          <label for="terms">Terms and conditions</label>
+          <textarea class="input" id="terms" name="terms" maxlength="1000"
+                    placeholder="One per visit. Not valid with other offers.">{value('terms')}</textarea>
+          <p class="hint">Shown collapsed on the deal page so it does not crowd the offer.</p>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Deal image</legend>
+      <p class="hint image-hint">
+        Optional. Without one the card falls back to the business's cover photo,
+        then their logo, then their initials — so a deal never looks broken.
+      </p>
+      <ImageUpload
+        name="image_media_id" label="Image" aspect="wide" maxEdge={1400}
+        current={deal?.image ?? null}
+        hint="A photo of the actual thing on offer beats a stock image."
+      />
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>When it runs</legend>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="starts_at">Starts</label>
+          <input class="input" id="starts_at" name="starts_at" type="datetime-local"
+                 value={toLocalInput(deal?.starts_at)} />
+          <p class="hint">Leave blank to start as soon as it goes live.</p>
+        </div>
+        <div class="field">
+          <label for="ends_at">Ends</label>
+          <input class="input" id="ends_at" name="ends_at" type="datetime-local"
+                 value={toLocalInput(deal?.ends_at)} />
+          <p class="hint">
+            Leave blank to run until you stop it. If you set a date, the deal
+            comes off the site by itself — you do not have to remember.
+          </p>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Placement</legend>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="status">Status</label>
+          <select class="input" id="status" name="status">
+            <option value="draft" selected={value('status', 'draft') === 'draft'}>Draft — hidden</option>
+            <option value="active" selected={value('status') === 'active'}>Live — publish it</option>
+            <option value="paused" selected={value('status') === 'paused'}>Paused — temporarily off</option>
+          </select>
+          <p class="hint">Pausing frees up a slot against the plan limit.</p>
+        </div>
+
+        <div class="field">
+          <label for="badge_id">Badge</label>
+          <select class="input" id="badge_id" name="badge_id">
+            <option value="">None — pick one automatically</option>
+            {(badges ?? []).map((b: any) => (
+              <option value={b.id} selected={deal?.badge_id === b.id}>{b.label}</option>
+            ))}
+          </select>
+          <p class="hint">Leave on automatic and the site shows New or Ending soon when they apply.</p>
+        </div>
+
+        <div class="field">
+          <label for="display_priority">Sort priority</label>
+          <input class="input" id="display_priority" name="display_priority" type="number"
+                 value={value('display_priority', 0)} />
+        </div>
+
+        <div class="field">
+          <label class="switch">
+            <input type="checkbox" name="is_featured" checked={value('is_featured', false)} />
+            <span>Featured</span>
+          </label>
+          <p class="hint">Puts it in the homepage featured row. A Premium benefit.</p>
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">{isNew ? 'Create deal' : 'Save changes'}</button>
+      <a class="btn btn-ghost" href="/admin/deals">Cancel</a>
+    </div>
+  </form>
+
+  {!isNew && (
+    <form method="post" class="dup-form">
+      <input type="hidden" name="intent" value="duplicate" />
+      <button class="btn btn-outline btn-sm" type="submit">Duplicate this deal</button>
+      <span class="hint">Makes a draft copy with the dates cleared. Useful for re-running an offer.</span>
+    </form>
+  )}
+
+  {!isNew && deal.status !== 'archived' && (
+    <div class="panel danger-zone">
+      <h2>Archive this deal</h2>
+      <p class="panel-hint">
+        Takes it off the website right away and frees a slot against the plan
+        limit. The link keeps working for anyone who saved it, and past
+        reporting is untouched. To hide it temporarily instead, set the status
+        to Paused above.
+      </p>
+      <form method="post" data-confirm-archive>
+        <input type="hidden" name="intent" value="archive" />
+        <button class="btn btn-danger" type="submit">Archive deal</button>
+      </form>
+    </div>
+  )}
+</Admin>
+
+<style>
+  .image-hint { margin-bottom: var(--pp-space-3); }
+  .dup-form {
+    display: flex; align-items: center; gap: var(--pp-space-3);
+    flex-wrap: wrap; margin-top: var(--pp-space-4);
+  }
+  .state-banner {
+    padding: var(--pp-space-3) var(--pp-space-4);
+    border-radius: var(--pp-radius-inset);
+    font-size: var(--pp-text-sm); font-weight: 600;
+    margin-bottom: var(--pp-space-4);
+  }
+  .tone-ok   { background: var(--pp-lime-100); color: var(--pp-green); }
+  .tone-warn { background: #FBF1DC; color: #7A5A15; }
+  .tone-off  { background: #EDEEEA; color: var(--pp-muted); }
+  .danger-zone { margin-top: var(--pp-space-6); border-color: var(--pp-danger-line); }
+  .danger-zone h2 { color: var(--pp-danger); }
+</style>
+

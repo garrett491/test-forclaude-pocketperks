@@ -1,0 +1,145 @@
+---
+import Admin from '../../layouts/Admin.astro';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+let actionError: string | null = null;
+let actionSuccess: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  // Someone will ask to come off the list by text or in person. Honour it
+  // here rather than making it a SQL job. The row is marked unsubscribed
+  // rather than deleted, so a later import cannot silently re-add them.
+  const form = await Astro.request.formData();
+  const email = String(form.get('email') ?? '').trim().toLowerCase();
+  if (!email) {
+    actionError = 'Enter the email address to remove.';
+  } else {
+    const { data, error: rpcError } = await db.rpc('unsubscribe_email', { target_email: email });
+    if (rpcError) actionError = 'That did not work. Check the address and try again.';
+    else if (data === true) actionSuccess = `${email} is now unsubscribed.`;
+    else actionError = `${email} is not on the list, or was already unsubscribed.`;
+  }
+}
+
+const params = Astro.url.searchParams;
+const query = (params.get('q') ?? '').trim();
+const page = Math.max(1, parseInt(params.get('page') ?? '1', 10) || 1);
+const size = 50;
+
+let request = db
+  .from('subscribers')
+  .select('id, email, status, source, created_at, town:towns ( name )', { count: 'exact' })
+  .order('created_at', { ascending: false })
+  .range((page - 1) * size, page * size - 1);
+
+if (query) request = request.ilike('email', `%${query.replace(/[%,()]/g, '')}%`);
+
+const { data, count, error } = await request;
+const subscribers = (data ?? []) as any[];
+const pageCount = Math.max(1, Math.ceil((count ?? 0) / size));
+
+const { count: activeCount } = await db
+  .from('subscribers').select('id', { count: 'exact', head: true }).eq('status', 'active');
+
+const fmt = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+---
+
+<Admin title="Subscribers" profile={profile}>
+  <a slot="actions" class="btn btn-outline btn-sm" href="/admin/subscribers.csv" download>
+    Export CSV
+  </a>
+
+  {actionSuccess && <p class="form-success" role="status">{actionSuccess}</p>}
+  {actionError && <p class="form-error" role="alert">{actionError}</p>}
+  {error && <p class="form-error" role="alert">Could not load subscribers. Reload the page.</p>}
+
+  <div class="stat-grid">
+    <div class="stat">
+      <p class="stat-value">{(activeCount ?? 0).toLocaleString()}</p>
+      <p class="stat-label">Active subscribers</p>
+    </div>
+    <div class="stat">
+      <p class="stat-value">{(count ?? 0).toLocaleString()}</p>
+      <p class="stat-label">Total records</p>
+      <p class="stat-note">Includes unsubscribed and bounced</p>
+    </div>
+  </div>
+
+  <p class="help">
+    The CSV export is what you import into ActiveCampaign. When you are ready to
+    move the list across, switch <strong>Newsletter destination</strong> in
+    Settings and every signup form on the site points at your ActiveCampaign
+    form instead. No code change needed.
+  </p>
+
+  <form class="filter-bar" method="get">
+    <label class="sr-only" for="q">Search by email</label>
+    <input class="input" id="q" name="q" type="search" value={query} placeholder="Search by email" />
+    <button class="btn btn-outline btn-sm" type="submit">Search</button>
+    {query && <a class="btn btn-ghost btn-sm" href="/admin/subscribers">Clear</a>}
+  </form>
+
+  <div class="table-wrap">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th scope="col">Email</th>
+          <th scope="col">Status</th>
+          <th scope="col">Signed up from</th>
+          <th scope="col">Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {subscribers.map((s) => (
+          <tr>
+            <td>{s.email}</td>
+            <td><span class={`pill pill-${s.status === 'active' ? 'active' : 'draft'}`}>{s.status}</span></td>
+            <td>{s.source ?? '—'}</td>
+            <td>{fmt(s.created_at)}</td>
+          </tr>
+        ))}
+        {subscribers.length === 0 && (
+          <tr><td colspan="4" class="empty-row">
+            {query ? 'No addresses match that search.' : 'No signups yet.'}
+          </td></tr>
+        )}
+      </tbody>
+    </table>
+  </div>
+
+  <section class="panel unsub">
+    <h2>Remove someone by request</h2>
+    <p class="panel-hint">
+      For when a person asks to come off the list directly. They stay on record
+      as unsubscribed rather than being deleted, so a later import cannot put
+      them back.
+    </p>
+    <form method="post" class="unsub-form">
+      <div class="field">
+        <label class="sr-only" for="unsub-email">Email address to unsubscribe</label>
+        <input class="input" id="unsub-email" name="email" type="email" required
+               placeholder="person@example.com" />
+      </div>
+      <button class="btn btn-outline" type="submit">Unsubscribe</button>
+    </form>
+  </section>
+
+  {pageCount > 1 && (
+    <nav class="pagination" aria-label="Pagination">
+      {page > 1 && <a class="chip" href={`?page=${page - 1}${query ? `&q=${encodeURIComponent(query)}` : ''}`}>Previous</a>}
+      <span class="chip" aria-current="true">Page {page} of {pageCount}</span>
+      {page < pageCount && <a class="chip" href={`?page=${page + 1}${query ? `&q=${encodeURIComponent(query)}` : ''}`}>Next</a>}
+    </nav>
+  )}
+</Admin>
+
+<style>
+  .help { margin-block: var(--pp-space-4); }
+  .pagination { display: flex; gap: var(--pp-space-2); justify-content: center; margin-top: var(--pp-space-5); }
+  .unsub { margin-top: var(--pp-space-5); }
+  .unsub-form { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; align-items: flex-end; }
+  .unsub-form .field { flex: 1; min-width: 14rem; }
+</style>

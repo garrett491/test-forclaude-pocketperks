@@ -1,0 +1,127 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+const params = Astro.url.searchParams;
+const status = params.get('status') ?? 'all';
+const merchantFilter = params.get('merchant') ?? '';
+const flash = params.get('saved');
+
+let request = db
+  .from('deals')
+  .select('id, headline, status, coupon_code, starts_at, ends_at, is_featured, created_at, merchant:merchants ( id, name, slug, tier )')
+  .order('status')
+  .order('created_at', { ascending: false });
+
+if (status !== 'all') request = request.eq('status', status);
+if (merchantFilter) request = request.eq('merchant_id', merchantFilter);
+
+const [{ data, error }, { data: merchants }] = await Promise.all([
+  request,
+  db.from('merchants').select('id, name').neq('status', 'archived').order('name'),
+]);
+
+const deals = (data ?? []) as any[];
+
+const statuses = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Live' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'paused', label: 'Paused' },
+  { key: 'archived', label: 'Archived' },
+];
+
+/**
+ * A deal can be status "active" and still be invisible, because the public
+ * read policy also checks the schedule. Showing the real state prevents the
+ * "I published it, where is it?" phone call.
+ */
+function liveState(deal: any): { label: string; cls: string } {
+  if (deal.status !== 'active') return { label: deal.status, cls: deal.status };
+  const now = Date.now();
+  if (deal.starts_at && new Date(deal.starts_at).getTime() > now) return { label: 'scheduled', cls: 'paused' };
+  if (deal.ends_at && new Date(deal.ends_at).getTime() <= now) return { label: 'expired', cls: 'archived' };
+  return { label: 'live', cls: 'active' };
+}
+
+const fmt = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+---
+
+<Admin title="Deals" profile={profile}>
+  <a slot="actions" class="btn btn-primary btn-sm" href="/admin/deals/new">Add deal</a>
+
+  {flash && <p class="form-success" role="status">{decodeURIComponent(flash)}</p>}
+  {error && <p class="form-error" role="alert">Could not load deals. Reload the page.</p>}
+
+  <form class="filter-bar" method="get">
+    <label class="sr-only" for="merchant">Business</label>
+    <select class="input" id="merchant" name="merchant">
+      <option value="">All businesses</option>
+      {(merchants ?? []).map((m: any) => (
+        <option value={m.id} selected={merchantFilter === m.id}>{m.name}</option>
+      ))}
+    </select>
+    <input type="hidden" name="status" value={status} />
+    <button class="btn btn-outline btn-sm" type="submit">Filter</button>
+    {(merchantFilter || status !== 'all') && <a class="btn btn-ghost btn-sm" href="/admin/deals">Clear</a>}
+  </form>
+
+  <div class="chip-row" role="list" aria-label="Filter by status">
+    {statuses.map((s) => (
+      <a class="chip" role="listitem"
+         href={`/admin/deals?status=${s.key}${merchantFilter ? `&merchant=${merchantFilter}` : ''}`}
+         aria-current={status === s.key ? 'true' : undefined}>{s.label}</a>
+    ))}
+  </div>
+
+  <div class="table-wrap">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th scope="col">Deal</th>
+          <th scope="col">Business</th>
+          <th scope="col">Showing</th>
+          <th scope="col">Code</th>
+          <th scope="col">Runs until</th>
+          <th scope="col"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {deals.map((d) => {
+          const state = liveState(d);
+          return (
+            <tr>
+              <td>
+                <a href={`/admin/deals/${d.id}`}>{d.headline}</a>
+                {d.is_featured && <span class="pill pill-active feat">Featured</span>}
+              </td>
+              <td>{d.merchant?.name ?? '—'}</td>
+              <td><span class={`pill pill-${state.cls}`}>{state.label}</span></td>
+              <td>{d.coupon_code ?? '—'}</td>
+              <td>{fmt(d.ends_at)}</td>
+              <td>
+                {state.label === 'live' && d.merchant?.slug && (
+                  <a href={`/b/${d.merchant.slug}`} target="_blank" rel="noopener">View</a>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+        {deals.length === 0 && (
+          <tr><td colspan="6" class="empty-row">
+            {status !== 'all' || merchantFilter ? 'No deals match that filter.' : 'No deals yet. Add the first one.'}
+          </td></tr>
+        )}
+      </tbody>
+    </table>
+  </div>
+</Admin>
+
+<style>
+  .feat { margin-left: var(--pp-space-2); }
+  .chip-row { margin-bottom: var(--pp-space-4); }
+  .filter-bar .input { max-width: 16rem; }
+</style>

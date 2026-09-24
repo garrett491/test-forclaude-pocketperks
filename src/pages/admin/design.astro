@@ -1,0 +1,270 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { str, int, humanError } from '../../lib/admin';
+import {
+  SWATCHES, FONTS, COLOR_FIELDS, DEFAULT_THEME,
+  resolveTheme, swatchValue, contrastRatio, contrastVerdict,
+  type ThemeTokens,
+} from '../../lib/theme';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+let error: string | null = null;
+let success: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? 'save');
+
+  if (intent === 'reset') {
+    const { error: resetError } = await db
+      .from('site_settings')
+      .update({ value: {}, updated_by: profile.id })
+      .eq('key', 'theme.tokens');
+    if (resetError) error = humanError(resetError);
+    else success = 'Back to the original Pocket Perks look.';
+  } else {
+    const tokens: ThemeTokens = {};
+    for (const field of COLOR_FIELDS) {
+      const value = str(form, field.key);
+      // Only accept ids that exist in the swatch set. A value from a tampered
+      // form cannot inject arbitrary CSS into every page of the site.
+      if (value && SWATCHES.some((s) => s.id === value)) {
+        (tokens as Record<string, unknown>)[field.key] = value;
+      }
+    }
+
+    const display = str(form, 'font_display');
+    const body = str(form, 'font_body');
+    if (display && FONTS.some((f) => f.id === display)) tokens.font_display = display;
+    if (body && FONTS.some((f) => f.id === body)) tokens.font_body = body;
+
+    tokens.text_scale = Math.min(120, Math.max(88, int(form, 'text_scale', 100)));
+    tokens.heading_scale = Math.min(130, Math.max(85, int(form, 'heading_scale', 100)));
+    const density = String(form.get('density') ?? 'normal');
+    if (['compact', 'normal', 'roomy'].includes(density)) tokens.density = density;
+
+    const { error: saveError } = await db
+      .from('site_settings')
+      .update({ value: tokens, updated_by: profile.id })
+      .eq('key', 'theme.tokens');
+    if (saveError) error = humanError(saveError);
+    else success = 'Saved. The site updates within a minute.';
+  }
+}
+
+const { data: row } = await db
+  .from('site_settings').select('value').eq('key', 'theme.tokens').maybeSingle();
+const theme = resolveTheme(row?.value);
+
+const groups = ['brand', 'white', 'grey', 'black', 'beige', 'special'] as const;
+const groupLabels: Record<string, string> = {
+  brand: 'Brand greens', white: 'Whites', grey: 'Greys',
+  black: 'Blacks', beige: 'Beiges', special: 'Other',
+};
+
+/** Live contrast for every pairing that has one, computed server-side. */
+const checks = COLOR_FIELDS.filter((f) => f.against).map((field) => {
+  const fg = swatchValue(theme[field.key] as string);
+  const bg = swatchValue(theme[field.against!] as string);
+  const ratio = fg && bg ? contrastRatio(fg, bg) : null;
+  return { field, verdict: contrastVerdict(ratio) };
+}).filter((c) => c.verdict);
+
+const failing = checks.filter((c) => c.verdict!.tone !== 'ok');
+---
+
+<Admin title="Design" profile={profile}>
+  <form slot="actions" method="post" data-confirm-reset>
+    <input type="hidden" name="intent" value="reset" />
+    <button class="btn btn-outline btn-sm" type="submit">Reset to brand defaults</button>
+  </form>
+
+  {success && <p class="form-success" role="status">{success}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  <p class="help">
+    Colours come from a fixed set — brand greens, whites, greys, blacks and
+    beiges — rather than a free colour picker. That is deliberate: an open
+    picker eventually produces pale text on a pale background at 2:1, which is
+    unreadable in a car park in July, and that is where a lot of this site gets
+    used. Nothing here is locked, but anything risky is flagged.
+  </p>
+
+  {/*
+    Warnings appear at the top rather than buried beside each control. If four
+    pairings are failing you want to know before you scroll past them.
+  */}
+  {failing.length > 0 && (
+    <div class="contrast-warn" role="status">
+      <h2>{failing.length} {failing.length === 1 ? 'combination is' : 'combinations are'} hard to read</h2>
+      <ul class="list-plain">
+        {failing.map((c) => (
+          <li>
+            <strong>{c.field.label}</strong> on {COLOR_FIELDS.find((f) => f.key === c.field.against)?.label.toLowerCase()}
+            {' — '}{c.verdict!.note}
+          </li>
+        ))}
+      </ul>
+      <p class="warn-foot">Nothing is blocked. Reset to brand defaults if it goes wrong.</p>
+    </div>
+  )}
+
+  <form method="post" class="stack">
+    <input type="hidden" name="intent" value="save" />
+
+    <section class="panel">
+      <h2>Colours</h2>
+      <p class="panel-hint">Pick a swatch for each part of the page.</p>
+
+      {COLOR_FIELDS.map((field) => {
+        const current = theme[field.key] as string;
+        const against = field.against ? swatchValue(theme[field.against] as string) : null;
+        const verdict = against ? contrastVerdict(contrastRatio(swatchValue(current) ?? '', against)) : null;
+        return (
+          <fieldset class="swatch-field">
+            <legend>
+              {field.label}
+              {verdict && (
+                <span class={`verdict tone-${verdict.tone}`}>{verdict.level}</span>
+              )}
+            </legend>
+            <p class="hint">{field.hint} {verdict && verdict.note}</p>
+
+            <div class="swatch-rows">
+              {groups.map((group) => {
+                const options = SWATCHES.filter((s) => s.group === group);
+                if (!options.length) return null;
+                return (
+                  <div class="swatch-row">
+                    <span class="swatch-group">{groupLabels[group]}</span>
+                    <div class="swatches">
+                      {options.map((swatch) => (
+                        <label class="swatch" title={swatch.label}>
+                          <input type="radio" name={field.key} value={swatch.id}
+                                 checked={current === swatch.id} />
+                          <span class="chipcolour"
+                                style={`background:${swatch.value === 'transparent' ? 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50%/12px 12px' : swatch.value}`}></span>
+                          <span class="sr-only">{swatch.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </fieldset>
+        );
+      })}
+    </section>
+
+    <section class="panel">
+      <h2>Fonts</h2>
+      <p class="panel-hint">
+        Ten families, tested together. A free-text box would let a typo render
+        the whole site in Times New Roman with nothing to warn you.
+      </p>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="font_display">Headings</label>
+          <select class="input" id="font_display" name="font_display">
+            {FONTS.filter((f) => f.role !== 'body').map((f) => (
+              <option value={f.id} selected={theme.font_display === f.id}>{f.label}</option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="font_body">Body text</label>
+          <select class="input" id="font_body" name="font_body">
+            {FONTS.filter((f) => f.role !== 'display').map((f) => (
+              <option value={f.id} selected={theme.font_body === f.id}>{f.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Sizes and spacing</h2>
+      <p class="panel-hint">Applies everywhere at once, so nothing drifts out of proportion.</p>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="text_scale">Text size — {theme.text_scale}%</label>
+          <input class="input range" id="text_scale" name="text_scale" type="range"
+                 min="88" max="120" step="2" value={theme.text_scale} />
+          <p class="hint">100% is the standard 16 pixels. Below 92% gets hard to read on a phone.</p>
+        </div>
+        <div class="field">
+          <label for="heading_scale">Heading size — {theme.heading_scale}%</label>
+          <input class="input range" id="heading_scale" name="heading_scale" type="range"
+                 min="85" max="130" step="5" value={theme.heading_scale} />
+          <p class="hint">Relative to the text size above.</p>
+        </div>
+        <div class="field span-2">
+          <label for="density">Spacing</label>
+          <select class="input" id="density" name="density">
+            <option value="compact" selected={theme.density === 'compact'}>Compact — more on screen</option>
+            <option value="normal" selected={theme.density === 'normal'}>Normal</option>
+            <option value="roomy" selected={theme.density === 'roomy'}>Roomy — easier to scan</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">Save design</button>
+      <a class="btn btn-ghost" href="/" target="_blank" rel="noopener">Open the site</a>
+    </div>
+  </form>
+</Admin>
+
+<style>
+  .contrast-warn {
+    background: #FBF1DC; border-left: 4px solid #B8860B;
+    border-radius: var(--pp-radius-inset);
+    padding: var(--pp-space-4); margin-bottom: var(--pp-space-4);
+  }
+  .contrast-warn h2 { font-size: var(--pp-text-base); margin: 0 0 var(--pp-space-2); color: #7A5A15; }
+  .contrast-warn ul { display: flex; flex-direction: column; gap: var(--pp-space-1); font-size: var(--pp-text-sm); color: #7A5A15; }
+  .warn-foot { margin: var(--pp-space-3) 0 0; font-size: var(--pp-text-xs); color: #7A5A15; }
+
+  .swatch-field {
+    border: 0; padding: 0; margin: 0 0 var(--pp-space-5);
+    border-top: 1px solid var(--pp-line); padding-top: var(--pp-space-4);
+  }
+  .swatch-field:first-of-type { border-top: 0; padding-top: 0; }
+  .swatch-field legend {
+    padding: 0; font-size: var(--pp-text-sm); font-weight: 700;
+    display: flex; align-items: center; gap: var(--pp-space-2);
+  }
+  .verdict { font-size: var(--pp-text-xs); padding: 0.1em 0.5em; border-radius: var(--pp-radius-chip); }
+  .tone-ok { background: var(--pp-lime-100); color: var(--pp-green); }
+  .tone-warn { background: #FBF1DC; color: #7A5A15; }
+  .tone-bad { background: var(--pp-danger-soft); color: var(--pp-danger); }
+
+  .swatch-rows { display: flex; flex-direction: column; gap: var(--pp-space-2); margin-top: var(--pp-space-2); }
+  .swatch-row { display: flex; align-items: center; gap: var(--pp-space-3); flex-wrap: wrap; }
+  .swatch-group { font-size: var(--pp-text-xs); color: var(--pp-muted); min-width: 6.5rem; }
+  .swatches { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; }
+
+  .swatch { position: relative; cursor: pointer; }
+  .swatch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .chipcolour {
+    display: block; width: 34px; height: 34px; border-radius: 8px;
+    border: 2px solid var(--pp-line-strong);
+  }
+  .swatch input:checked + .chipcolour {
+    border-color: var(--pp-ink);
+    box-shadow: 0 0 0 3px var(--pp-lime);
+  }
+  .swatch input:focus-visible + .chipcolour { outline: 3px solid var(--pp-focus); outline-offset: 2px; }
+
+  .input.range { padding: 0; min-height: var(--pp-tap-min); accent-color: var(--pp-lime); border: 0; background: none; }
+
+  /* On a phone the swatch grid needs room to breathe or the targets collide. */
+  @media (max-width: 34rem) {
+    .swatch-group { min-width: 100%; }
+    .chipcolour { width: 40px; height: 40px; }
+  }
+</style>

@@ -1,0 +1,345 @@
+@import './tokens.css';
+
+/* =====================================================================
+   Reset
+   ===================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--pp-bg);
+  color: var(--pp-text);
+  font-family: var(--pp-font-body);
+  font-size: var(--pp-text-base);
+  line-height: var(--pp-leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+img, svg, video { display: block; max-width: 100%; height: auto; }
+button, select, textarea { font: inherit; color: inherit; }
+input { font: inherit; }
+
+h1, h2, h3, h4 {
+  color: var(--pp-heading);
+  font-family: var(--pp-font-display);
+  line-height: var(--pp-leading-tight);
+  letter-spacing: -0.015em;
+  margin: 0 0 var(--pp-space-3);
+  font-weight: 700;
+  text-wrap: balance;
+}
+h1 { font-size: var(--pp-text-3xl); }
+h2 { font-size: var(--pp-text-2xl); }
+h3 { font-size: var(--pp-text-xl); }
+h4 { font-size: var(--pp-text-lg); font-family: var(--pp-font-body); font-weight: 600; }
+
+p { margin: 0 0 var(--pp-space-4); max-width: var(--pp-measure); }
+p:last-child { margin-bottom: 0; }
+
+a { color: var(--pp-link); text-underline-offset: 0.18em; }
+a:hover { color: var(--pp-green-600); }
+
+ul, ol { margin: 0; padding: 0; }
+
+/* Accessible-but-invisible text, for context screen readers need and
+   sighted users get from layout. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: absolute; left: var(--pp-space-3); top: -3rem;
+  z-index: 100; padding: var(--pp-space-3) var(--pp-space-4);
+  background: var(--pp-deep); color: var(--pp-white);
+  border-radius: var(--pp-radius-inset); font-weight: 600;
+  transition: top var(--pp-duration) var(--pp-ease);
+}
+.skip-link:focus { top: var(--pp-space-3); color: var(--pp-white); }
+
+/* =====================================================================
+   Layout primitives
+   ===================================================================== */
+
+.wrap {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+  padding-inline: var(--pp-space-4);
+}
+@media (min-width: 40rem) { .wrap { padding-inline: var(--pp-space-5); } }
+
+.section { padding-block: var(--pp-space-6); }
+@media (min-width: 48rem) { .section { padding-block: var(--pp-space-7); } }
+
+.section-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--pp-space-4); margin-bottom: var(--pp-space-4);
+  flex-wrap: wrap;
+}
+.section-head h2 { margin: 0; }
+.section-head a { font-size: var(--pp-text-sm); font-weight: 600; white-space: nowrap; }
+
+/* One grid definition. Cards are at least 15rem so a phone shows a single
+   readable column rather than two cramped ones — the old two-up mobile grid
+   left business names at 0.82rem in a 170px box. */
+.grid {
+  display: grid;
+  gap: var(--pp-space-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
+}
+@media (min-width: 30rem) {
+  .grid { grid-template-columns: repeat(auto-fill, minmax(16.5rem, 1fr)); }
+}
+
+/* =====================================================================
+   Buttons
+   Every interactive target clears the 44px WCAG 2.2 floor.
+   ===================================================================== */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--pp-space-2);
+  min-height: var(--pp-tap-min);
+  padding: var(--pp-space-2) var(--pp-space-5);
+  border: 1px solid transparent;
+  border-radius: var(--pp-radius-chip);
+  font-weight: 600; font-size: var(--pp-text-sm);
+  text-decoration: none; cursor: pointer;
+  transition: background var(--pp-duration) var(--pp-ease),
+              border-color var(--pp-duration) var(--pp-ease),
+              transform var(--pp-duration) var(--pp-ease);
+}
+.btn:active { transform: translateY(1px); }
+
+/* Ink on lime = 6.45:1. Lime on white would be 2.98:1, which is why lime
+   is only ever a surface. */
+.btn-primary { background: var(--pp-action-bg); color: var(--pp-action-text); }
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--pp-action-bg) 88%, black);
+  color: var(--pp-action-text);
+}
+
+.btn-deep { background: var(--pp-deep); color: var(--pp-white); }
+.btn-deep:hover { background: var(--pp-deep-800); color: var(--pp-white); }
+
+.btn-outline {
+  background: var(--pp-surface); color: var(--pp-green);
+  border-color: var(--pp-line-strong);
+}
+.btn-outline:hover { border-color: var(--pp-green); background: var(--pp-deep-050); }
+
+.btn-ghost { background: transparent; color: var(--pp-green); padding-inline: var(--pp-space-3); }
+.btn-ghost:hover { background: var(--pp-deep-050); }
+
+.btn-block { width: 100%; }
+.btn-sm { min-height: 38px; padding: var(--pp-space-1) var(--pp-space-3); font-size: var(--pp-text-xs); }
+
+/* =====================================================================
+   Chips — filters and badges
+   ===================================================================== */
+
+.chip {
+  display: inline-flex; align-items: center; gap: var(--pp-space-2);
+  min-height: 40px; padding: var(--pp-space-2) var(--pp-space-4);
+  border: 1px solid var(--pp-line-strong);
+  border-radius: var(--pp-radius-chip);
+  background: var(--pp-surface); color: var(--pp-text);
+  font-size: var(--pp-text-sm); font-weight: 500;
+  text-decoration: none; white-space: nowrap;
+  transition: border-color var(--pp-duration) var(--pp-ease),
+              background var(--pp-duration) var(--pp-ease);
+}
+.chip:hover { border-color: var(--pp-green); color: var(--pp-text); }
+.chip[aria-current='true'], .chip.is-active {
+  background: var(--pp-deep); border-color: var(--pp-deep); color: var(--pp-white);
+}
+.chip-count { font-size: var(--pp-text-xs); opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+.chip-row {
+  display: flex; gap: var(--pp-space-2); flex-wrap: wrap;
+}
+/* On a phone the filters scroll horizontally instead of wrapping into four
+   rows that push the deals below the fold. */
+@media (max-width: 40rem) {
+  .chip-row {
+    flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity;
+    margin-inline: calc(-1 * var(--pp-space-4));
+    padding-inline: var(--pp-space-4); padding-bottom: var(--pp-space-2);
+    scrollbar-width: none;
+  }
+  .chip-row::-webkit-scrollbar { display: none; }
+  .chip-row > * { scroll-snap-align: start; }
+}
+
+/* Badges carry meaning, never decoration. Four exist; each says one thing. */
+.badge {
+  display: inline-flex; align-items: center; gap: 0.3em;
+  padding: 0.25em 0.7em; border-radius: var(--pp-radius-chip);
+  font-size: var(--pp-text-xs); font-weight: 700;
+  letter-spacing: 0.01em; white-space: nowrap;
+}
+.badge-lime    { background: var(--pp-lime); color: var(--pp-ink); }
+.badge-deep    { background: var(--pp-deep); color: var(--pp-white); }
+.badge-neutral { background: var(--pp-lime-100); color: var(--pp-green); }
+.badge-outline { background: var(--pp-surface); color: var(--pp-green); box-shadow: inset 0 0 0 1.5px var(--pp-green); }
+
+/* =====================================================================
+   Cards
+   ===================================================================== */
+
+.card {
+  background: var(--pp-surface);
+  border: 1px solid var(--pp-line);
+  border-radius: var(--pp-radius-card);
+  box-shadow: var(--pp-shadow-card);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  transition: box-shadow var(--pp-duration) var(--pp-ease),
+              border-color var(--pp-duration) var(--pp-ease);
+}
+.card:hover, .card:focus-within {
+  box-shadow: var(--pp-shadow-lift);
+  border-color: var(--pp-line-strong);
+}
+
+/* The one memorable device: the dashed topstitching from the pocket in the
+   logo, edging the coupon panel of a deal card and nothing else on the site. */
+.stitch-panel {
+  position: relative;
+  margin: var(--pp-space-3);
+  padding: var(--pp-space-3) var(--pp-space-3) var(--pp-space-3) var(--pp-space-4);
+  border-left: var(--pp-stitch);
+  background: var(--pp-deep-050);
+  border-radius: var(--pp-radius-inset);
+}
+
+/* =====================================================================
+   Forms
+   ===================================================================== */
+
+.field { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+.field label { font-size: var(--pp-text-sm); font-weight: 600; }
+.field .hint { font-size: var(--pp-text-xs); color: var(--pp-muted); }
+
+.input {
+  min-height: var(--pp-tap-min);
+  padding: var(--pp-space-2) var(--pp-space-4);
+  border: 1px solid var(--pp-line-strong);
+  border-radius: var(--pp-radius-chip);
+  background: var(--pp-surface);
+  /* Explicit, never inherited. Inheriting put white text on a white field
+     inside the dark hero, which made whatever you typed invisible. */
+  color: var(--pp-text);
+  width: 100%;
+}
+.input::placeholder { color: var(--pp-muted-soft); opacity: 1; }
+/* Safari renders search fields with its own colour rules unless told not to. */
+.input[type='search'] { -webkit-appearance: none; appearance: none; color: var(--pp-text); }
+.input[type='search']::-webkit-search-decoration,
+.input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; }
+.input[aria-invalid='true'] { border-color: var(--pp-danger); }
+
+.form-error {
+  display: flex; gap: var(--pp-space-2); align-items: flex-start;
+  padding: var(--pp-space-3) var(--pp-space-4);
+  background: var(--pp-danger-soft);
+  border: 1px solid var(--pp-danger-line);
+  border-radius: var(--pp-radius-inset);
+  color: var(--pp-danger); font-size: var(--pp-text-sm);
+}
+.form-success {
+  padding: var(--pp-space-3) var(--pp-space-4);
+  background: var(--pp-lime-100);
+  border: 1px solid var(--pp-lime);
+  border-radius: var(--pp-radius-inset);
+  color: var(--pp-green); font-size: var(--pp-text-sm); font-weight: 600;
+}
+
+/* A honeypot. Positioned off-screen rather than display:none, because some
+   bots skip hidden fields but almost none skip positioned ones. */
+.hp-field {
+  position: absolute; left: -9999px; top: auto;
+  width: 1px; height: 1px; overflow: hidden;
+}
+
+/* =====================================================================
+   Utilities
+   ===================================================================== */
+
+.muted { color: var(--pp-muted); }
+.text-sm { font-size: var(--pp-text-sm); }
+.text-xs { font-size: var(--pp-text-xs); }
+.stack { display: flex; flex-direction: column; gap: var(--pp-space-3); }
+.row { display: flex; align-items: center; gap: var(--pp-space-3); flex-wrap: wrap; }
+.list-plain { list-style: none; }
+
+/* =====================================================================
+   "More from this business"
+
+   One treatment, used on every surface a business appears on: deal cards,
+   carousel slides, business cards and deal pages.
+
+   Deliberately loud. Showing one offer per business keeps the feed usable,
+   but it also hides most of what a Pro or Premium merchant is paying to
+   display — so the fact that there IS more has to be impossible to miss.
+   A quiet grey link at the bottom of a card was not doing that job.
+
+   Lime fill with ink text is 6.45:1, so it is legible in sunlight, which is
+   where a lot of this gets read.
+   ===================================================================== */
+
+.more-band {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--pp-space-3);
+  width: 100%;
+  min-height: var(--pp-tap-min);
+  padding: var(--pp-space-2) var(--pp-space-4);
+  background: var(--pp-action-bg);
+  color: var(--pp-action-text);
+  border: 0;
+  border-radius: var(--pp-radius-inset);
+  font-size: var(--pp-text-sm);
+  font-weight: 700;
+  text-decoration: none;
+  text-align: left;
+  cursor: pointer;
+  /* Above any card-wide link overlay, so this is genuinely clickable rather
+     than sitting underneath a target that goes somewhere else. */
+  position: relative;
+  z-index: 2;
+  transition: background var(--pp-duration) var(--pp-ease);
+}
+.more-band:hover,
+.more-band:focus-visible {
+  background: color-mix(in srgb, var(--pp-action-bg) 86%, black);
+  color: var(--pp-action-text);
+}
+.more-band .mb-text { text-decoration: underline; text-underline-offset: 0.18em; }
+.more-band .mb-arrow { font-size: 1.15em; line-height: 1; flex-shrink: 0; }
+
+/* On the dark carousel and footer surfaces the lime fill still reads, but the
+   band needs to sit clear of the card edge. */
+.more-band-inset { margin: 0 var(--pp-space-4) var(--pp-space-4); width: auto; }
+
+/* A quieter variant for places where the whole card already leads to the
+   same business — the point there is the count, not a second destination. */
+.more-band-soft {
+  background: var(--pp-lime-100);
+  color: var(--pp-green);
+  box-shadow: inset 0 0 0 1.5px var(--pp-accent);
+}
+.more-band-soft:hover, .more-band-soft:focus-visible {
+  background: var(--pp-accent); color: var(--pp-ink);
+}

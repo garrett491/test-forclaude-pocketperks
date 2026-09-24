@@ -1,0 +1,110 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+const params = Astro.url.searchParams;
+const status = params.get('status') ?? 'all';
+const query = (params.get('q') ?? '').trim();
+const flash = params.get('saved');
+
+let request = db
+  .from('merchants')
+  .select('id, name, slug, status, tier, is_featured, display_priority, created_at, category:categories ( name ), town:towns ( name ), deals ( id, status )')
+  .order('status')
+  .order('name');
+
+if (status !== 'all') request = request.eq('status', status);
+if (query) request = request.ilike('name', `%${query.replace(/[%,()]/g, '')}%`);
+
+const { data, error } = await request;
+const merchants = (data ?? []) as any[];
+
+const statuses = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Live' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'paused', label: 'Paused' },
+  { key: 'archived', label: 'Archived' },
+];
+
+const liveDeals = (m: any) => (m.deals ?? []).filter((d: any) => d.status === 'active').length;
+const dealCap = (tier: string) => (tier === 'standard' ? 2 : 3);
+---
+
+<Admin title="Businesses" profile={profile}>
+  <a slot="actions" class="btn btn-primary btn-sm" href="/admin/merchants/new">Add business</a>
+
+  {flash && <p class="form-success" role="status">{decodeURIComponent(flash)}</p>}
+  {error && <p class="form-error" role="alert">Could not load businesses. Reload the page.</p>}
+
+  <form class="filter-bar" method="get">
+    <label class="sr-only" for="q">Search businesses</label>
+    <input class="input" id="q" name="q" type="search" value={query} placeholder="Search by name" />
+    <input type="hidden" name="status" value={status} />
+    <button class="btn btn-outline btn-sm" type="submit">Search</button>
+    {(query || status !== 'all') && <a class="btn btn-ghost btn-sm" href="/admin/merchants">Clear</a>}
+  </form>
+
+  <div class="chip-row" role="list" aria-label="Filter by status">
+    {statuses.map((s) => (
+      <a class="chip" role="listitem"
+         href={`/admin/merchants?status=${s.key}${query ? `&q=${encodeURIComponent(query)}` : ''}`}
+         aria-current={status === s.key ? 'true' : undefined}>{s.label}</a>
+    ))}
+  </div>
+
+  <div class="table-wrap">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Status</th>
+          <th scope="col">Plan</th>
+          <th scope="col">Category</th>
+          <th scope="col" class="num">Live deals</th>
+          <th scope="col"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {merchants.map((m) => (
+          <tr>
+            <td>
+              <a href={`/admin/merchants/${m.id}`}>{m.name}</a>
+              {m.is_featured && <span class="pill pill-active feat">Featured</span>}
+            </td>
+            <td><span class={`pill pill-${m.status}`}>{m.status}</span></td>
+            <td><span class="pill pill-tier">{m.tier}</span></td>
+            <td>{m.category?.name ?? '—'}</td>
+            {/* Showing the cap alongside the count is how you notice a
+                Standard merchant sitting at their limit before they ring. */}
+            <td class="num">
+              {liveDeals(m)} <span class="cap">of {dealCap(m.tier)}</span>
+            </td>
+            <td>
+              {m.status === 'active' && (
+                <a href={`/b/${m.slug}`} target="_blank" rel="noopener">View</a>
+              )}
+            </td>
+          </tr>
+        ))}
+        {merchants.length === 0 && (
+          <tr>
+            <td colspan="6" class="empty-row">
+              {query || status !== 'all'
+                ? 'No businesses match that filter.'
+                : 'No businesses yet. Add the first one to get started.'}
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  </div>
+</Admin>
+
+<style>
+  .feat { margin-left: var(--pp-space-2); }
+  .cap { color: var(--pp-muted); font-weight: 400; }
+  .chip-row { margin-bottom: var(--pp-space-4); }
+</style>

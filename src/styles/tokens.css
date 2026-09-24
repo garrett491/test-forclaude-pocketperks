@@ -1,0 +1,149 @@
+/* =====================================================================
+   Pocket Perks — design tokens
+
+   Every colour below is either sampled directly from the logo PNG or is
+   a tint/shade of one. No hue exists here that is not in the mark.
+
+   Sampled values:
+     #060E22  "Perks" wordmark        -> --pp-ink
+     #093814  pocket body             -> --pp-deep
+     #12611B  "Pocket" wordmark       -> --pp-green
+     #56A837  card face + stitching   -> --pp-lime
+     #FFFFFF  card highlight          -> --pp-white
+
+   HARD RULE, do not break it:
+     --pp-lime on white measures 2.98:1. It is a SURFACE colour, never
+     text on a light background. Text on lime uses --pp-ink (6.45:1).
+     For green text on white, use --pp-green (7.63:1).
+   ===================================================================== */
+
+:root {
+  /* ---- Sampled brand ------------------------------------------------ */
+  --pp-ink:            #060E22;
+  --pp-deep:           #093814;
+  --pp-green:          #12611B;
+  --pp-lime:           #56A837;
+  --pp-white:          #FFFFFF;
+
+  /* ---- Derived tints and shades ------------------------------------- */
+  --pp-deep-800:       #0C4A1A;   /* hover on deep surfaces          */
+  --pp-deep-050:       #E8F0E8;   /* faint green wash                */
+  --pp-green-600:      #177621;   /* link hover                      */
+  --pp-lime-700:       #3E7F27;   /* 4.92:1 on white — usable text   */
+  --pp-lime-300:       #A8DE8F;   /* on dark surfaces only           */
+  --pp-lime-100:       #E4F4DA;   /* badge and chip fills            */
+
+  /* ---- Neutral ramp, warmed very slightly toward the green --------- */
+  --pp-paper:          #F7F6F2;   /* page background                 */
+  --pp-surface:        #FFFFFF;   /* cards                           */
+  --pp-line:           #E2E3DD;   /* hairline borders                */
+  --pp-line-strong:    #C7CAC1;
+  --pp-muted:          #4E5D50;   /* 6.46:1 on paper — meta text     */
+  --pp-muted-soft:     #5A6B5C;   /* 5.26:1 on paper — de-emphasis   */
+
+  /* ---- Feedback ------------------------------------------------------
+     One hue, two values. Red for errors and destructive confirmations is
+     a convention strong enough that replacing it with green causes real
+     mistakes in a panel where you delete merchant records. It appears
+     nowhere decorative.                                                */
+  --pp-danger:         #B3261E;   /* 6.54:1 on white, and as a fill  */
+  --pp-danger-soft:    #FBEAE8;
+  --pp-danger-line:    #E9BDB8;
+
+  /* ---- Semantic aliases: components reference these, not raw hex ---- */
+  --pp-bg:             var(--pp-paper);
+  --pp-bg-raised:      var(--pp-surface);
+  --pp-bg-inverse:     var(--pp-deep);
+  --pp-text:           var(--pp-ink);
+  --pp-text-inverse:   var(--pp-white);
+  --pp-text-muted:     var(--pp-muted);
+  --pp-link:           var(--pp-green);
+  --pp-action-bg:      var(--pp-lime);
+  --pp-action-text:    var(--pp-ink);
+  --pp-border:         var(--pp-line);
+  --pp-focus:          var(--pp-green);
+  /* Set by the Design page. Defaults keep the logo-derived look. */
+  --pp-heading:        var(--pp-ink);
+  --pp-accent:         var(--pp-lime);
+  --pp-header-bg:      var(--pp-surface);
+  --pp-header-text:    var(--pp-ink);
+  --pp-footer-bg:      var(--pp-deep);
+  --pp-footer-text:    var(--pp-white);
+
+  /* ---- Type ----------------------------------------------------------
+     The existing pairing stays. Playfair Display is most of what makes
+     the site look like a local business rather than a coupon aggregator,
+     and DM Sans is a well-drawn, highly legible companion at small
+     sizes. Changing it would cost brand recognition for no measurable
+     gain. Weights are cut from six to three — the old page loaded
+     Playfair 700+900 and DM Sans 300/400/500/600 and used three of them. */
+  --pp-font-display: 'Playfair Display', 'Iowan Old Style', Georgia, serif;
+  --pp-font-body:    'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Fluid scale, ~1.25 ratio, clamped so nothing gets silly on a phone */
+  --pp-text-xs:   0.78rem;
+  --pp-text-sm:   0.875rem;
+  --pp-text-base: 1rem;
+  --pp-text-lg:   1.125rem;
+  --pp-text-xl:   clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);
+  --pp-text-2xl:  clamp(1.5rem,  1.3rem + 1.1vw, 2rem);
+  --pp-text-3xl:  clamp(1.9rem,  1.5rem + 2.0vw, 2.9rem);
+
+  --pp-leading-tight: 1.15;
+  --pp-leading-body:  1.55;
+  --pp-measure:       64ch;
+
+  /* ---- Space: 4px base --------------------------------------------- */
+  --pp-space-1: 0.25rem;
+  --pp-space-2: 0.5rem;
+  --pp-space-3: 0.75rem;
+  --pp-space-4: 1rem;
+  --pp-space-5: 1.5rem;
+  --pp-space-6: 2rem;
+  --pp-space-7: 3rem;
+  --pp-space-8: 4rem;
+
+  /* ---- Radius: three values, each meaning something -----------------
+     Uniform radius on everything is the SaaS-kit tell. Here the value
+     encodes what kind of object it is.                                 */
+  --pp-radius-chip:   999px;  /* pills: filters, badges               */
+  --pp-radius-card:   14px;   /* content cards                        */
+  --pp-radius-inset:  8px;    /* things inside a card                 */
+
+  /* ---- Elevation: two steps, no more ------------------------------- */
+  --pp-shadow-card:  0 1px 2px rgba(6, 14, 34, 0.05),
+                     0 4px 12px rgba(6, 14, 34, 0.05);
+  --pp-shadow-lift:  0 2px 4px rgba(6, 14, 34, 0.06),
+                     0 12px 28px rgba(6, 14, 34, 0.10);
+
+  /* ---- The stitch ---------------------------------------------------
+     The dashed topstitching around the pocket in the logo. This is the
+     one device carried through the whole interface: it edges the coupon
+     panel on every deal card and nothing else. Spending the boldness in
+     one place is what keeps the rest quiet.                            */
+  --pp-stitch: 1.5px dashed var(--pp-accent);
+
+  --pp-tap-min: 44px;         /* WCAG 2.2 AA target size floor        */
+  --pp-ease:    cubic-bezier(0.2, 0, 0, 1);
+  --pp-duration: 180ms;
+}
+
+/* Motion answers an action; it never plays on its own. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --pp-duration: 0ms; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Visible keyboard focus everywhere. The old site set outline:none on
+   every input and replaced it with a border tint, which is invisible to
+   anyone tabbing through the page. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--pp-focus);
+  outline-offset: 2px;
+  border-radius: var(--pp-radius-inset);
+}

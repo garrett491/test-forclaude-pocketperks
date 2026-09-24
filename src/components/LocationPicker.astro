@@ -1,0 +1,195 @@
+---
+import type { Town } from '../lib/types';
+import type { TownContext } from '../lib/location';
+
+interface Props {
+  context: TownContext;
+  /** 'header' is the compact button; 'hero' is the large first-action bar. */
+  variant?: 'header' | 'hero';
+}
+const { context, variant = 'header' } = Astro.props;
+const { towns, town, showingAll, isDefault } = context;
+
+/**
+ * Rebuilt as a <dialog>.
+ *
+ * The previous version was an absolutely positioned panel inside the header.
+ * The header carries `backdrop-filter`, and a filtered element becomes the
+ * containing block for its fixed-position descendants — so the mobile bottom
+ * sheet was being positioned against the 60px header instead of the viewport,
+ * which is why the town list could not be seen after tapping the button.
+ *
+ * A dialog renders in the browser's top layer, outside every containing
+ * block, and brings a focus trap and Escape handling with it. One code path
+ * for desktop and mobile, and nothing above it can clip it.
+ */
+const label = showingAll ? 'All towns' : town ? town.name : 'Pick your town';
+const needsChoice = isDefault && !showingAll;
+
+/**
+ * The dialog is rendered once, by the header instance. The hero instance is
+ * just another button that opens it. Two pickers on the homepage otherwise
+ * meant two dialogs sharing an element id, which is invalid markup and
+ * leaves a screen reader following aria-labelledby to whichever it met
+ * first.
+ */
+const ownsDialog = variant === 'header';
+---
+
+{variant === 'hero' ? (
+  <div class="hero-location">
+    <span class="hl-eyebrow">Showing deals in</span>
+    <button class="hl-button" type="button" data-town-open>
+      <span class="pin" aria-hidden="true">📍</span>
+      <span class="hl-name">{label}</span>
+      <span class="hl-change">Change</span>
+    </button>
+    {needsChoice && (
+      <p class="hl-hint">Not your town? Tap to pick from {towns.length} nearby.</p>
+    )}
+  </div>
+) : (
+  <button class="picker-btn" type="button" data-town-open
+          aria-label={`Change location. Currently ${label}`}>
+    <span class="pin" aria-hidden="true">📍</span>
+    <span class="picker-label">{label}</span>
+    <span class="caret" aria-hidden="true">▾</span>
+  </button>
+)}
+
+{ownsDialog && (
+<dialog class="town-dialog" data-town-dialog aria-labelledby="town-dialog-title">
+  <div class="td-inner">
+    <div class="td-head">
+      <h2 id="town-dialog-title">Choose your town</h2>
+      <button class="td-close" type="button" data-town-close aria-label="Close">×</button>
+    </div>
+    <p class="td-hint">We'll remember this and show you deals from here.</p>
+
+    <ul class="td-list list-plain">
+      {towns.map((t: Town) => (
+        <li>
+          <a href={`/${t.slug}`} data-town-option data-town-slug={t.slug} data-town-name={t.name}
+             aria-current={!showingAll && town?.slug === t.slug ? 'true' : undefined}>
+            <span class="td-name">{t.name}</span>
+            <span class="td-state">{t.state_code}</span>
+          </a>
+        </li>
+      ))}
+      <li class="td-all">
+        <a href="/businesses?town=all" data-town-option data-town-slug="" data-town-name="All towns"
+           aria-current={showingAll ? 'true' : undefined}>
+          <span class="td-name">Show every town</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+</dialog>
+)}
+
+<style>
+  /* ---- Header button ---- */
+  .picker-btn {
+    display: inline-flex; align-items: center; gap: var(--pp-space-2);
+    min-height: var(--pp-tap-min);
+    padding: var(--pp-space-2) var(--pp-space-4);
+    background: var(--pp-action-bg); color: var(--pp-action-text);
+    border: 0; border-radius: var(--pp-radius-chip);
+    font-size: var(--pp-text-sm); font-weight: 700;
+    cursor: pointer; white-space: nowrap;
+  }
+  .picker-btn:hover { background: color-mix(in srgb, var(--pp-action-bg) 88%, black); }
+  .caret { font-size: 0.8em; opacity: 0.8; }
+  .picker-label { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---- Hero bar: the first obvious action on the page ---- */
+  .hero-location {
+    display: flex; flex-direction: column; gap: var(--pp-space-2);
+    margin-bottom: var(--pp-space-4);
+  }
+  .hl-eyebrow {
+    font-size: var(--pp-text-xs); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--pp-lime-300);
+  }
+  .hl-button {
+    display: inline-flex; align-items: center; gap: var(--pp-space-3);
+    align-self: flex-start; max-width: 100%;
+    min-height: 52px;
+    padding: var(--pp-space-2) var(--pp-space-3) var(--pp-space-2) var(--pp-space-4);
+    background: var(--pp-surface); color: var(--pp-text);
+    border: 0; border-left: var(--pp-stitch);
+    border-radius: var(--pp-radius-inset);
+    cursor: pointer; box-shadow: var(--pp-shadow-card);
+  }
+  .hl-button:hover { box-shadow: var(--pp-shadow-lift); }
+  .hl-name {
+    font-family: var(--pp-font-display); font-size: var(--pp-text-xl);
+    line-height: 1; color: var(--pp-heading);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .hl-change {
+    margin-left: auto; flex-shrink: 0;
+    font-size: var(--pp-text-xs); font-weight: 700;
+    color: var(--pp-action-text); background: var(--pp-action-bg);
+    padding: 0.4em 0.85em; border-radius: var(--pp-radius-chip);
+  }
+  .hl-hint { margin: 0; font-size: var(--pp-text-sm); color: rgba(255, 255, 255, 0.82); }
+
+  /* ---- Dialog ---- */
+  .town-dialog {
+    border: 0; padding: 0; background: transparent;
+    max-width: 26rem; width: calc(100% - 2rem);
+    border-radius: var(--pp-radius-card);
+  }
+  .town-dialog::backdrop { background: rgba(6, 14, 34, 0.55); }
+  .td-inner {
+    background: var(--pp-surface);
+    border-radius: var(--pp-radius-card);
+    border-top: var(--pp-stitch);
+    padding: var(--pp-space-5);
+  }
+  .td-head { display: flex; align-items: center; justify-content: space-between; gap: var(--pp-space-3); }
+  .td-head h2 { margin: 0; font-size: var(--pp-text-xl); }
+  .td-close {
+    width: var(--pp-tap-min); height: var(--pp-tap-min);
+    display: grid; place-items: center; cursor: pointer;
+    background: transparent; border: 1px solid var(--pp-line-strong);
+    border-radius: 50%; font-size: 1.4rem; line-height: 1; color: var(--pp-text);
+  }
+  .td-close:hover { border-color: var(--pp-danger); color: var(--pp-danger); }
+  .td-hint { margin: var(--pp-space-2) 0 var(--pp-space-4); font-size: var(--pp-text-sm); color: var(--pp-text-muted); }
+
+  .td-list { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+  .td-list a {
+    display: flex; align-items: center; gap: var(--pp-space-3);
+    min-height: 54px; padding-inline: var(--pp-space-4);
+    border: 1px solid var(--pp-line);
+    border-radius: var(--pp-radius-inset);
+    color: var(--pp-text); text-decoration: none; font-weight: 600;
+  }
+  .td-list a:hover { border-color: var(--pp-accent); background: var(--pp-deep-050); color: var(--pp-text); }
+  .td-list a[aria-current='true'] {
+    background: var(--pp-footer-bg); color: var(--pp-footer-text); border-color: var(--pp-footer-bg);
+  }
+  .td-state { margin-left: auto; font-size: var(--pp-text-xs); opacity: 0.7; }
+  .td-all { margin-top: var(--pp-space-2); padding-top: var(--pp-space-3); border-top: 1px solid var(--pp-line); }
+  .td-all a { border-style: dashed; }
+
+  /* On a phone it becomes a bottom sheet — a thumb's natural reach. Because
+     this is a dialog it sits in the top layer, so nothing in the header can
+     clip or reposition it. */
+  @media (max-width: 34rem) {
+    .town-dialog {
+      max-width: none; width: 100%;
+      margin: auto 0 0; padding: 0;
+      border-radius: var(--pp-radius-card) var(--pp-radius-card) 0 0;
+    }
+    .td-inner {
+      border-radius: var(--pp-radius-card) var(--pp-radius-card) 0 0;
+      padding-bottom: calc(var(--pp-space-6) + env(safe-area-inset-bottom, 0px));
+    }
+    .td-list a { min-height: 58px; font-size: var(--pp-text-lg); }
+    .hl-name { font-size: var(--pp-text-lg); }
+  }
+</style>

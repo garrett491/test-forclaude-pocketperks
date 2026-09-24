@@ -1,0 +1,29 @@
+---
+import Base from '../layouts/Base.astro';
+import { getSiteChrome, CACHE_STATIC } from '../lib/queries';
+Astro.response.headers.set('Cache-Control', CACHE_STATIC);
+const { settings } = await getSiteChrome();
+const email = settings['contact.email'] as string | undefined;
+const token = Astro.url.searchParams.get('t');
+---
+
+<Base title="Unsubscribe" noindex={true} canonicalPath="/unsubscribe">
+  <div class="wrap section prose">
+    <h1>Unsubscribe</h1>
+    {token ? (
+      <p>Use the unsubscribe link in any email and you will be removed straight away.</p>
+    ) : (
+      <p>
+        Every Pocket Perks email has an unsubscribe link at the bottom. Open the
+        most recent one and use that link, and you will be removed straight away.
+      </p>
+    )}
+    <p>If you cannot find it, write to us and we will take your address off the list.</p>
+    {email && <a class="btn btn-primary" href={`mailto:${email}?subject=Unsubscribe`}>Email us</a>}
+  </div>
+</Base>
+
+<style>
+  .prose { max-width: 40rem; }
+  .prose p { color: var(--pp-muted); }
+</style>

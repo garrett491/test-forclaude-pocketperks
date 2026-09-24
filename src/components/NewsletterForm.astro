@@ -1,0 +1,95 @@
+---
+import type { SiteSettings } from '../lib/types';
+
+interface Props {
+  source: string;
+  settings: SiteSettings;
+  compact?: boolean;
+  headline?: string;
+  body?: string;
+  ctaLabel?: string;
+  finePrint?: string;
+}
+
+const {
+  source, settings, compact = false,
+  headline = 'New deals, once a week',
+  body = 'One email each week with what is new from local businesses.',
+  ctaLabel = 'Send me deals',
+  finePrint = 'We only email about local deals. Unsubscribe any time.',
+} = Astro.props;
+
+/**
+ * The whole ActiveCampaign migration is this switch. Flip
+ * `newsletter.mode` to `activecampaign_link` in the dashboard and every
+ * form on the site becomes a link to the hosted form instead. No redeploy.
+ */
+const mode = (settings['newsletter.mode'] as string) ?? 'supabase';
+const externalUrl = settings['newsletter.external_form_url'] as string | undefined;
+const useExternal = mode === 'activecampaign_link' && !!externalUrl;
+
+const formId = `nl-${source}`;
+
+/**
+ * One email field. The old form also asked for a phone number, which is a
+ * second field standing between the visitor and the only thing being
+ * collected, and there is no SMS programme with consent language behind it.
+ */
+---
+
+<section class={`newsletter ${compact ? 'is-compact' : ''}`} aria-labelledby={`${formId}-title`}>
+  <h2 id={`${formId}-title`} class="nl-title">{headline}</h2>
+  <p class="nl-body">{body}</p>
+
+  {useExternal ? (
+    <a href={externalUrl} class="btn btn-primary" rel="noopener">{ctaLabel}</a>
+  ) : (
+    <form class="nl-form" data-newsletter data-source={source} novalidate>
+      <div class="field">
+        <label class="sr-only" for={`${formId}-email`}>Email address</label>
+        <input
+          class="input" id={`${formId}-email`} name="email" type="email"
+          inputmode="email" autocomplete="email" required
+          placeholder="you@example.com" aria-describedby={`${formId}-fine`}
+        />
+      </div>
+
+      {/* Honeypot. Real people never see it; scripted submitters fill it. */}
+      <div class="hp-field" aria-hidden="true">
+        <label for={`${formId}-company`}>Company</label>
+        <input id={`${formId}-company`} name="company" type="text" tabindex="-1" autocomplete="off" />
+      </div>
+
+      <button class="btn btn-primary" type="submit">{ctaLabel}</button>
+
+      <p class="nl-fine" id={`${formId}-fine`}>{finePrint}</p>
+      <div class="nl-status" role="status" aria-live="polite"></div>
+    </form>
+  )}
+</section>
+
+<style>
+  .newsletter { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+  .nl-title { font-size: var(--pp-text-lg); margin: 0; }
+  .nl-body { font-size: var(--pp-text-sm); margin: 0; opacity: 0.9; }
+  .nl-form { display: flex; flex-direction: column; gap: var(--pp-space-3); margin-top: var(--pp-space-2); }
+  @media (min-width: 30rem) {
+    .nl-form { display: grid; grid-template-columns: 1fr auto; gap: var(--pp-space-2); }
+    .nl-form .field { grid-column: 1; }
+    .nl-form button { grid-column: 2; }
+    .nl-fine, .nl-status { grid-column: 1 / -1; }
+  }
+  .nl-fine { font-size: var(--pp-text-xs); opacity: 0.75; margin: 0; }
+  .nl-status:empty { display: none; }
+  .nl-status[data-state='error'] {
+    color: var(--pp-danger); font-size: var(--pp-text-sm); font-weight: 600;
+  }
+  .nl-status[data-state='ok'] {
+    color: var(--pp-green); font-size: var(--pp-text-sm); font-weight: 600;
+  }
+
+  /* Inside the dark footer, invert the text and keep the error legible. */
+  :global(.site-footer) .nl-status[data-state='error'] { color: #F7B4AF; }
+  :global(.site-footer) .nl-status[data-state='ok'] { color: var(--pp-lime-300); }
+</style>
+

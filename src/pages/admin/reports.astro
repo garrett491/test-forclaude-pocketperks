@@ -1,0 +1,224 @@
+---
+import Admin from '../../layouts/Admin.astro';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+const params = Astro.url.searchParams;
+
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const presets: Record<string, number> = { '7': 7, '30': 30, '90': 90 };
+const rangeKey = params.get('range') ?? '30';
+const days = presets[rangeKey] ?? 30;
+
+const from = params.get('from') ?? iso(new Date(Date.now() - (days - 1) * 86_400_000));
+const to = params.get('to') ?? iso(new Date());
+const merchantId = params.get('merchant');
+
+const [{ data: merchants }, summaryRes] = await Promise.all([
+  db.from('merchants').select('id, name, slug, tier').neq('status', 'archived').order('name'),
+  db.rpc('merchant_report_summary', { p_from: from, p_to: to }),
+]);
+
+const summary = (summaryRes.data ?? []) as any[];
+const selected = merchantId ? summary.find((r) => r.merchant_id === merchantId) : null;
+const selectedMerchant = (merchants ?? []).find((m: any) => m.id === merchantId) as any;
+
+const n = (v: number | null | undefined) => (v ?? 0).toLocaleString();
+
+/**
+ * Three groups, in the order a merchant reads them, with the meaning spelled
+ * out under each number.
+ *
+ * There is no fourth group for customers or sales. This website observes
+ * taps, not tills, and the first merchant who checks their own call log
+ * against an inflated claim stops believing every other number on the page.
+ */
+const groups = selected
+  ? [
+      {
+        title: 'Impressions',
+        blurb: 'Times a deal from this business appeared on someone’s screen.',
+        rows: [{ label: 'Deal impressions', value: selected.impressions }],
+      },
+      {
+        title: 'Views',
+        blurb: 'Someone chose to open the page and look.',
+        rows: [
+          { label: 'Business profile views', value: selected.profile_views },
+          { label: 'Deal pages opened', value: selected.deal_opens },
+        ],
+      },
+      {
+        title: 'Intent actions',
+        blurb: 'Someone took a step toward visiting or buying.',
+        rows: [
+          { label: 'Tapped Call', value: selected.call_clicks },
+          { label: 'Asked for directions', value: selected.directions_clicks },
+          { label: 'Clicked through to the website', value: selected.website_clicks },
+          { label: 'Copied a coupon code', value: selected.code_copies },
+          { label: 'Shared a deal', value: selected.shares },
+        ],
+      },
+    ]
+  : [];
+---
+
+<Admin title="Reports" profile={profile}>
+  <form class="filter-bar" method="get">
+    <label class="sr-only" for="merchant">Business</label>
+    <select class="input" id="merchant" name="merchant">
+      <option value="">All businesses</option>
+      {(merchants ?? []).map((m: any) => (
+        <option value={m.id} selected={merchantId === m.id}>{m.name}</option>
+      ))}
+    </select>
+
+    <label class="sr-only" for="from">From</label>
+    <input class="input date" id="from" name="from" type="date" value={from} />
+    <label class="sr-only" for="to">To</label>
+    <input class="input date" id="to" name="to" type="date" value={to} />
+
+    <button class="btn btn-outline btn-sm" type="submit">Show</button>
+  </form>
+
+  <div class="chip-row" role="list" aria-label="Quick date ranges">
+    {Object.keys(presets).map((key) => (
+      <a class="chip" role="listitem"
+         href={`/admin/reports?range=${key}${merchantId ? `&merchant=${merchantId}` : ''}`}
+         aria-current={rangeKey === key && !params.get('from') ? 'true' : undefined}>
+        Last {key} days
+      </a>
+    ))}
+  </div>
+
+  {selected && selectedMerchant ? (
+    <>
+      <div class="report-head panel">
+        <div>
+          <h2>{selected.merchant_name}</h2>
+          <p class="panel-hint">
+            {new Date(from).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} to{' '}
+            {new Date(to).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+            {' '}· {selectedMerchant.tier} plan
+          </p>
+        </div>
+        <div class="row">
+          <a class="btn btn-ghost btn-sm" href={`/b/${selectedMerchant.slug}`} target="_blank" rel="noopener">View page</a>
+          <button class="btn btn-outline btn-sm" type="button" data-print>Print or save as PDF</button>
+        </div>
+      </div>
+
+      <div class="headline-stats stat-grid">
+        <div class="stat">
+          <p class="stat-value">{n(selected.reached_people)}</p>
+          <p class="stat-label">People reached</p>
+          <p class="stat-note">Approximate. Someone visiting on two days counts twice.</p>
+        </div>
+        <div class="stat">
+          <p class="stat-value">{n(selected.intent_actions)}</p>
+          <p class="stat-label">Intent actions</p>
+          <p class="stat-note">Calls, directions, website clicks, code copies, shares</p>
+        </div>
+      </div>
+
+      {groups.map((group) => (
+        <section class="panel">
+          <h2>{group.title}</h2>
+          <p class="panel-hint">{group.blurb}</p>
+          <table class="admin-table bare">
+            <tbody>
+              {group.rows.map((row) => (
+                <tr>
+                  <td>{row.label}</td>
+                  <td class="num"><strong>{n(row.value)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
+
+      <div class="panel honesty">
+        <h2>What these numbers are not</h2>
+        <p class="panel-hint">Worth saying out loud when you hand this over.</p>
+        <p>
+          A tap on Call is a person choosing to ring the business. It is not a
+          sale, and this report does not claim it is. Pocket Perks can see what
+          happens on the website and nothing after that. Bot and crawler traffic
+          is filtered out before any of these figures are counted.
+        </p>
+      </div>
+    </>
+  ) : (
+    <section class="panel">
+      <h2>All businesses</h2>
+      <p class="panel-hint">
+        {new Date(from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} to{' '}
+        {new Date(to).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.
+        Pick a business above for its full report.
+      </p>
+
+      {summary.length ? (
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th scope="col">Business</th>
+                <th scope="col">Plan</th>
+                <th scope="col" class="num">Impressions</th>
+                <th scope="col" class="num">Profile views</th>
+                <th scope="col" class="num">Deal opens</th>
+                <th scope="col" class="num">Calls</th>
+                <th scope="col" class="num">Directions</th>
+                <th scope="col" class="num">Website</th>
+                <th scope="col" class="num">Intent total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map((row) => (
+                <tr>
+                  <td><a href={`/admin/reports?merchant=${row.merchant_id}&from=${from}&to=${to}`}>{row.merchant_name}</a></td>
+                  <td><span class="pill pill-tier">{row.tier}</span></td>
+                  <td class="num">{n(row.impressions)}</td>
+                  <td class="num">{n(row.profile_views)}</td>
+                  <td class="num">{n(row.deal_opens)}</td>
+                  <td class="num">{n(row.call_clicks)}</td>
+                  <td class="num">{n(row.directions_clicks)}</td>
+                  <td class="num">{n(row.website_clicks)}</td>
+                  <td class="num"><strong>{n(row.intent_actions)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p class="empty-row">
+          No activity recorded in this period. Figures are rolled up overnight,
+          so today's visits appear tomorrow morning.
+        </p>
+      )}
+    </section>
+  )}
+</Admin>
+
+<style>
+  .filter-bar .input { max-width: 15rem; }
+  .filter-bar .date { max-width: 10rem; }
+  .chip-row { margin-bottom: var(--pp-space-4); }
+  .report-head { display: flex; justify-content: space-between; gap: var(--pp-space-4); flex-wrap: wrap; align-items: flex-start; }
+  .report-head h2 { margin: 0; }
+  .headline-stats { margin-block: var(--pp-space-4); }
+  .admin-table.bare th, .admin-table.bare td { padding-inline: 0; }
+  .honesty p { font-size: var(--pp-text-sm); color: var(--pp-muted); max-width: 60ch; }
+
+  /* Printing is the delivery mechanism: the browser's Save as PDF turns this
+     into something you can email a merchant, without adding a PDF library. */
+  @media print {
+    .admin-topbar, .admin-nav, .filter-bar, .chip-row, .report-head .row { display: none !important; }
+    .admin-main { padding: 0; }
+    .panel { break-inside: avoid; box-shadow: none; border-color: #ccc; }
+    .admin-body { background: #fff; }
+  }
+</style>
+

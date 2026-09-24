@@ -1,0 +1,172 @@
+---
+import type { Deal } from '../lib/types';
+import {
+  imageUrl, imageSrcSet, imageDimensions, expiryLabel, isEndingSoon, isNew,
+  initials, truncate,
+} from '../lib/format';
+
+interface Props { deal: Deal; priority?: boolean; showMerchant?: boolean; }
+const { deal, priority = false, showMerchant = true } = Astro.props;
+
+const merchant = deal.merchant!;
+const href = `/b/${merchant.slug}/${deal.slug}`;
+const expiry = expiryLabel(deal);
+const cardWidth = 380;
+
+/**
+ * A logo standing in for a missing photo must not be cropped to fill a 16:10
+ * frame — that is what was slicing the tops and sides off wordmarks. When we
+ * fall back to the logo we contain it on white instead.
+ */
+const art = deal.image ?? merchant.cover ?? merchant.logo;
+const artIsLogo = !deal.image && !merchant.cover && !!merchant.logo;
+const dims = imageDimensions(art, cardWidth);
+
+/**
+ * Badge precedence, decided once here rather than per template.
+ * A card shows at most one badge: two badges compete and neither is read.
+ */
+const badge = deal.badge
+  ? { label: deal.badge.label, style: deal.badge.style_key }
+  : isEndingSoon(deal)
+    ? { label: expiry ?? 'Ending soon', style: 'outline' as const }
+    : isNew(deal)
+      ? { label: 'New', style: 'lime' as const }
+      : null;
+---
+
+<article
+  class="deal-card card"
+  data-deal-id={deal.id}
+  data-merchant-id={merchant.id}
+  data-track-impression
+>
+  <div class={`art ${artIsLogo ? 'is-logo' : ''}`}>
+    {art ? (
+      <img
+        src={imageUrl(art, cardWidth)}
+        srcset={imageSrcSet(art, cardWidth)}
+        sizes="(min-width: 60rem) 360px, (min-width: 30rem) 45vw, 92vw"
+        alt={art.alt_text || `${merchant.name}`}
+        width={dims.width}
+        height={dims.height}
+        loading={priority ? 'eager' : 'lazy'}
+        fetchpriority={priority ? 'high' : 'auto'}
+        decoding="async"
+      />
+    ) : (
+      <div class="art-fallback" aria-hidden="true"><span>{initials(merchant.name)}</span></div>
+    )}
+    {badge && <span class={`badge badge-${badge.style} art-badge`}>{badge.label}</span>}
+  </div>
+
+  <div class="body">
+    {showMerchant && (
+      <p class="merchant-line">
+        <span class="merchant-name">{merchant.name}</span>
+        {merchant.category && <span class="dot" aria-hidden="true"></span>}
+        {merchant.category && <span class="cat">{merchant.category.name}</span>}
+      </p>
+    )}
+
+    <h3 class="headline">
+      {/* The whole card is not a link. One link, one destination, so
+          keyboard and screen-reader users get a single unambiguous target
+          — the old cards nested phone, website and favourite buttons inside
+          a clickable div. */}
+      <a href={href} class="stretch">{deal.headline}</a>
+    </h3>
+
+    {deal.description && <p class="desc">{truncate(deal.description, 110)}</p>}
+
+    {deal.coupon_code && (
+      <div class="stitch-panel code-panel">
+        <span class="code-label">Code</span>
+        <span class="code-value">{deal.coupon_code}</span>
+      </div>
+    )}
+
+    {/* One card per business in the feed, so the rest of their offers are
+        one tap away rather than three more cards to scroll past. Loud,
+        because a business's other offers are the thing most easily missed. */}
+    {(deal.sibling_count ?? 0) > 0 && (
+      <a class="more-band" href={`/b/${merchant.slug}`}>
+        <span class="mb-text">
+          See {deal.sibling_count} more {deal.sibling_count === 1 ? 'deal' : 'deals'} from {merchant.name}
+        </span>
+        <span class="mb-arrow" aria-hidden="true">→</span>
+      </a>
+    )}
+
+    <div class="meta">
+      {expiry && <span class="expiry">{expiry}</span>}
+      <span class="see">See deal</span>
+    </div>
+  </div>
+</article>
+
+<style>
+  .deal-card { position: relative; }
+
+  .art { position: relative; aspect-ratio: 16 / 10; background: var(--pp-deep-050); }
+  .art img { width: 100%; height: 100%; object-fit: cover; }
+  .art.is-logo { background: var(--pp-white); }
+  .art.is-logo img { object-fit: contain; padding: var(--pp-space-5); }
+  .art-fallback {
+    width: 100%; height: 100%;
+    display: grid; place-items: center;
+    background: var(--pp-deep); color: var(--pp-lime-300);
+    font-family: var(--pp-font-display); font-size: 2.25rem;
+  }
+  .art-badge { position: absolute; top: var(--pp-space-3); left: var(--pp-space-3); }
+
+  .body {
+    padding: var(--pp-space-4);
+    display: flex; flex-direction: column; gap: var(--pp-space-2);
+    flex: 1;
+  }
+
+  .merchant-line {
+    display: flex; align-items: center; gap: var(--pp-space-2);
+    margin: 0; font-size: var(--pp-text-xs); color: var(--pp-muted);
+  }
+  .merchant-name { font-weight: 600; color: var(--pp-green); }
+  .dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+
+  .headline { font-size: var(--pp-text-lg); margin: 0; }
+  .headline a { color: var(--pp-text); text-decoration: none; }
+  .headline a:hover { color: var(--pp-green); text-decoration: underline; }
+
+  /* One target covering the card: a large, forgiving hit area (Fitts's Law)
+     without nesting interactive elements inside each other. */
+  .stretch::after {
+    content: ''; position: absolute; inset: 0; z-index: 1;
+  }
+
+  .desc { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
+
+  .code-panel {
+    display: flex; align-items: baseline; gap: var(--pp-space-2);
+    margin: var(--pp-space-1) 0 0;
+  }
+  .code-label {
+    font-size: var(--pp-text-xs); text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--pp-muted); font-weight: 600;
+  }
+  .code-value {
+    font-family: var(--pp-font-display); font-size: var(--pp-text-lg);
+    color: var(--pp-green); font-weight: 700;
+  }
+
+  .meta {
+    margin-top: auto; padding-top: var(--pp-space-2);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--pp-space-3);
+    font-size: var(--pp-text-xs);
+  }
+  .expiry { color: var(--pp-muted); font-weight: 600; }
+  .see {
+    color: var(--pp-green); font-weight: 700; margin-left: auto;
+  }
+  .deal-card:hover .see { text-decoration: underline; }
+</style>

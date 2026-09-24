@@ -1,0 +1,364 @@
+---
+import Base from '../layouts/Base.astro';
+import DealCard from '../components/DealCard.astro';
+import Carousel from '../components/Carousel.astro';
+import EmptyState from '../components/EmptyState.astro';
+import NewsletterForm from '../components/NewsletterForm.astro';
+import LocationPicker from '../components/LocationPicker.astro';
+import { getHomepageData, getSiteChrome, getTowns, CACHE_PUBLIC } from '../lib/queries';
+import { resolveTownContext, townFilter } from '../lib/location';
+
+Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
+
+/**
+ * The town selector is gone as a gate.
+ *
+ * The old homepage rendered nothing useful until a town was chosen: a
+ * visitor arriving from a QR code saw a hero, a stat row, an email bar and
+ * a set of town buttons, and zero deals. With one active town that choice
+ * had no payoff — it was an interstitial decision the visitor had no
+ * information to make. Deals now render immediately; town becomes a filter
+ * on /deals, and only appears in the interface once there is more than one.
+ */
+// The picker links to /[town] pages, but ?town= is honoured here too so a
+// filtered homepage is a real, shareable URL.
+const [{ settings, blocks }, towns] = await Promise.all([getSiteChrome(), getTowns()]);
+
+// Same resolution as every other page, so the homepage cannot disagree with
+// the directory about which town the visitor is in.
+const townContext = resolveTownContext(Astro.url, Astro.cookies, towns);
+if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
+
+const data = await getHomepageData(townFilter(townContext));
+
+const hero = blocks['home.hero']?.payload as Record<string, string> | undefined;
+const howBlock = blocks['home.how_it_works']?.payload as
+  | { steps?: { title: string; body: string }[] }
+  | undefined;
+const newsletter = blocks['home.newsletter']?.payload as Record<string, string> | undefined;
+const emptyBlock = blocks['empty.no_deals'];
+
+const hasDeals = data.latestDeals.length > 0;
+
+/**
+ * The hero no longer names a county.
+ *
+ * "Carroll County, Ohio" was a promise the brand outgrows the moment a
+ * second county is added, and it is exactly the sort of line nobody
+ * remembers to update. Which town is being viewed is now answered by the
+ * location control — a fact the visitor can change, rather than a claim.
+ */
+const areaName = (settings['location.area_name'] as string) || '';
+
+const carouselSeconds = Number(settings['carousel.seconds_per_slide'] ?? 8) || 8;
+const carouselAutoplay = settings['carousel.autoplay'] !== false;
+---
+
+<Base
+  title={(settings['seo.default_title'] as string) ?? 'Local Deals'}
+  description={settings['seo.default_description'] as string}
+  canonicalPath="/"
+  breadcrumbs={[{ name: 'Home', href: '/' }]}
+>
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <div class="hero-copy">
+        {/* The area is named in the first line rather than requiring a
+            click, so a first-time visitor knows within a second whether
+            this site is about anywhere near them. */}
+        <p class="eyebrow">{areaName}</p>
+        <h1>{hero?.headline ?? 'Save money at the places you already go'}</h1>
+        <p class="hero-sub">
+          {hero?.subheadline ?? 'Local coupons from nearby businesses. Free, no app, no signup.'}
+        </p>
+
+        {/*
+          Two numbered steps.
+
+          A first-time visitor should not have to work out the order of
+          operations. An arrow pointing at the corner was the other option,
+          but the header rewraps on a phone and the picker is not in the
+          corner there — an arrow aimed at nothing looks broken. A large
+          labelled control that IS the thing you press works identically at
+          every screen size.
+        */}
+        <ol class="hero-steps list-plain">
+          <li>
+            <span class="step-badge" aria-hidden="true">1</span>
+            <div class="step-body">
+              {towns.length > 1
+                ? <LocationPicker context={townContext} variant="hero" />
+                : <p class="step-single">Serving {townContext.town?.name}</p>}
+            </div>
+          </li>
+          <li>
+            <span class="step-badge" aria-hidden="true">2</span>
+            <div class="step-body">
+              <a class="step-scroll" href="#latest-title">
+                <span class="step-label">Scroll down for local deals</span>
+                <span class="step-arrow" aria-hidden="true">↓</span>
+              </a>
+            </div>
+          </li>
+        </ol>
+
+        {/* Results appear as you type — businesses and deals together, so
+            nobody has to guess which list they should be looking in. */}
+        <div class="hero-search-wrap">
+          <form class="hero-search" action="/deals" method="get" role="search">
+            <label class="sr-only" for="q">Search businesses, deals, towns or phone numbers</label>
+            <input
+              class="input" id="q" name="q" type="search"
+              placeholder="Pizza, oil change, a business name…"
+              autocomplete="off" role="combobox" aria-expanded="false"
+              aria-controls="hero-suggestions" data-suggest-search
+            />
+            <button class="btn btn-primary" type="submit">Search</button>
+          </form>
+          <div class="suggest-panel" id="hero-suggestions" data-suggest-panel hidden></div>
+        </div>
+
+        <div class="row hero-actions">
+          <a class="btn btn-deep" href={hero?.primary_cta_href ?? '/deals'}>
+            {hero?.primary_cta_label ?? 'Browse deals'}
+          </a>
+          <a class="btn btn-outline" href={hero?.secondary_cta_href ?? '/businesses'}>
+            {hero?.secondary_cta_label ?? 'See businesses'}
+          </a>
+        </div>
+
+        {/* Counts only. The old hero showed "Active Deals" using the
+            business count, and capped numbers at "20+". Both were untrue,
+            and a merchant who counts the listings would notice. */}
+        {hasDeals && (
+          <p class="hero-stats">
+            {data.totalDeals} {data.totalDeals === 1 ? 'deal' : 'deals'} from{' '}
+            {data.merchantCount} local {data.merchantCount === 1 ? 'business' : 'businesses'}
+          </p>
+        )}
+      </div>
+    </div>
+  </section>
+
+  {/* Premium placement, scoped to this town. Directly under the hero,
+      because that is what the position is worth paying for. */}
+  <Carousel deals={data.carousel} townName={data.carouselTown?.name ?? null}
+            seconds={carouselSeconds} autoplay={carouselAutoplay} />
+
+  {data.categories.length > 1 && (
+    <section class="wrap section" aria-labelledby="cat-title">
+      <h2 id="cat-title" class="sr-only">Browse by category</h2>
+      <div class="chip-row">
+        {data.categories.map((c) => (
+          <a class="chip" href={`/deals?category=${c.slug}`}>
+            {c.name}
+            <span class="chip-count">{c.deal_count}</span>
+          </a>
+        ))}
+      </div>
+    </section>
+  )}
+
+  {data.featuredDeals.length > 0 && (
+    <section class="wrap section" aria-labelledby="featured-title">
+      <div class="section-head">
+        <h2 id="featured-title">Featured this week</h2>
+        <a href="/deals?featured=1">See all featured</a>
+      </div>
+      <div class="grid">
+        {data.featuredDeals.map((deal, i) => (
+          <DealCard deal={deal} priority={i < 2} />
+        ))}
+      </div>
+    </section>
+  )}
+
+  <section class="wrap section" aria-labelledby="latest-title">
+    <div class="section-head">
+      <h2 id="latest-title">{data.featuredDeals.length > 0 ? 'Latest deals' : 'Deals near you'}</h2>
+      <a href="/deals">See all deals</a>
+    </div>
+
+    {hasDeals ? (
+      <div class="grid">
+        {data.latestDeals.map((deal, i) => (
+          <DealCard deal={deal} priority={data.featuredDeals.length === 0 && i < 2} />
+        ))}
+      </div>
+    ) : (
+      <EmptyState
+        block={emptyBlock}
+        headline="No deals live right now"
+        body="Businesses are being added. Leave your email and we'll tell you when the first offers go up."
+        ctaLabel="See businesses"
+        ctaHref="/businesses"
+      />
+    )}
+  </section>
+
+  {howBlock?.steps && (
+    <section class="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <h2 id="how-title">How it works</h2>
+        <ol class="how-steps list-plain">
+          {howBlock.steps.map((step, i) => (
+            <li>
+              {/* Numbered because it genuinely is a sequence. */}
+              <span class="step-num" aria-hidden="true">{i + 1}</span>
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  )}
+
+  {/*
+    One newsletter ask on the homepage, placed after the visitor has seen
+    actual deals. The old page had three inline asks plus a popup on a
+    ten-second timer — four requests before any value had been delivered,
+    and the timed one is also treated by Google as an intrusive mobile
+    interstitial. Value first, then the ask.
+  */}
+  <section class="wrap section">
+    <div class="signup-panel">
+      <NewsletterForm
+        source="home"
+        settings={settings}
+        headline={newsletter?.headline}
+        body={newsletter?.body}
+        ctaLabel={newsletter?.cta_label}
+        finePrint={newsletter?.fine_print}
+      />
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    background: var(--pp-deep);
+    color: var(--pp-white);
+    border-bottom: var(--pp-stitch);
+  }
+  .hero-inner { padding-block: var(--pp-space-6); }
+  @media (min-width: 48rem) { .hero-inner { padding-block: var(--pp-space-7); } }
+
+  /* Deliberately short. A hero taller than about 60vh on a phone pushes the
+     first deal below the fold, which is the opposite of "find a deal in ten
+     seconds". */
+  .hero-copy { max-width: 40rem; }
+  .hero h1 { color: var(--pp-white); margin-bottom: var(--pp-space-3); }
+  .hero-sub {
+    color: rgba(255, 255, 255, 0.86);
+    font-size: var(--pp-text-lg);
+    margin-bottom: var(--pp-space-5);
+  }
+
+  .hero-steps {
+    display: flex; flex-direction: column; gap: var(--pp-space-3);
+    margin-bottom: var(--pp-space-5);
+  }
+  .hero-steps li { display: flex; gap: var(--pp-space-3); align-items: center; }
+  .step-badge {
+    flex-shrink: 0;
+    width: 34px; height: 34px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--pp-action-bg); color: var(--pp-action-text);
+    font-weight: 700; font-size: var(--pp-text-base);
+  }
+  .step-body { min-width: 0; flex: 1; }
+  .step-body :global(.hero-location) { margin-bottom: 0; }
+  .step-single { margin: 0; color: rgba(255, 255, 255, 0.9); font-weight: 600; }
+
+  .step-scroll {
+    display: inline-flex; align-items: center; gap: var(--pp-space-3);
+    min-height: 52px; padding-inline: var(--pp-space-4);
+    background: transparent; color: var(--pp-white);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: var(--pp-radius-inset);
+    text-decoration: none; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: var(--pp-text-sm);
+  }
+  .step-scroll:hover { background: rgba(255, 255, 255, 0.1); color: var(--pp-white); border-color: var(--pp-accent); }
+  .step-arrow { font-size: 1.2em; }
+  /* The nudge points down the page, which is true at every screen size —
+     unlike an arrow aimed at a corner the header moves on mobile. */
+  @media (prefers-reduced-motion: no-preference) {
+    .step-arrow { animation: nudge 1.8s ease-in-out infinite; }
+    @keyframes nudge { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+  }
+
+  .hero-search-wrap { position: relative; margin-bottom: var(--pp-space-4); }
+  .hero-search { display: flex; gap: var(--pp-space-2); }
+  .suggest-panel {
+    position: absolute; left: 0; right: 0; top: calc(100% + var(--pp-space-2));
+    z-index: 25;
+    background: var(--pp-surface);
+    border: 1px solid var(--pp-line-strong);
+    border-radius: var(--pp-radius-card);
+    box-shadow: var(--pp-shadow-lift);
+    padding: var(--pp-space-2);
+    max-height: 60vh; overflow-y: auto;
+  }
+  .suggest-panel[hidden] { display: none; }
+  .suggest-panel :global(a) {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: var(--pp-space-2) var(--pp-space-3);
+    min-height: var(--pp-tap-min); justify-content: center;
+    border-radius: var(--pp-radius-inset);
+    color: var(--pp-text); text-decoration: none;
+  }
+  .suggest-panel :global(a:hover), .suggest-panel :global(a:focus-visible) {
+    background: var(--pp-deep-050); color: var(--pp-text);
+  }
+  .suggest-panel :global(.sg-main) { font-weight: 600; font-size: var(--pp-text-sm); }
+  .suggest-panel :global(.sg-sub) { font-size: var(--pp-text-xs); color: var(--pp-text-muted); }
+  .suggest-panel :global(.sg-all) {
+    display: block; text-align: center; font-weight: 700;
+    font-size: var(--pp-text-sm); color: var(--pp-link);
+    border-top: 1px solid var(--pp-line); margin-top: var(--pp-space-2);
+    padding-top: var(--pp-space-3);
+  }
+  .suggest-panel :global(.sg-none) {
+    margin: 0; padding: var(--pp-space-4); text-align: center;
+    font-size: var(--pp-text-sm); color: var(--pp-text-muted);
+  }
+  .hero-search .input { flex: 1; min-width: 0; border-color: transparent; }
+
+  .hero-actions { gap: var(--pp-space-3); }
+  .hero-stats {
+    margin: var(--pp-space-4) 0 0;
+    font-size: var(--pp-text-sm);
+    color: rgba(255, 255, 255, 0.7);
+    font-variant-numeric: tabular-nums;
+  }
+  .hero :global(.btn-outline) { background: transparent; color: var(--pp-white); border-color: rgba(255,255,255,0.35); }
+  .hero :global(.btn-outline:hover) { background: rgba(255,255,255,0.08); border-color: var(--pp-lime); color: var(--pp-white); }
+  .hero :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+
+  .how { background: var(--pp-surface); border-block: 1px solid var(--pp-line); padding-block: var(--pp-space-7); }
+  .how h2 { margin-bottom: var(--pp-space-5); }
+  .how-steps { display: grid; gap: var(--pp-space-5); grid-template-columns: 1fr; }
+  @media (min-width: 40rem) { .how-steps { grid-template-columns: repeat(3, 1fr); } }
+  .how-steps li { position: relative; padding-left: var(--pp-space-6); }
+  .step-num {
+    position: absolute; left: 0; top: 0;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--pp-lime); color: var(--pp-ink);
+    display: grid; place-items: center;
+    font-weight: 700; font-size: var(--pp-text-sm);
+  }
+  .how-steps h3 { font-size: var(--pp-text-lg); margin-bottom: var(--pp-space-1); }
+  .how-steps p { color: var(--pp-muted); font-size: var(--pp-text-sm); margin: 0; }
+
+  .signup-panel {
+    background: var(--pp-surface);
+    border: 1px solid var(--pp-line);
+    border-left: var(--pp-stitch);
+    border-radius: var(--pp-radius-card);
+    padding: var(--pp-space-5);
+    box-shadow: var(--pp-shadow-card);
+  }
+</style>

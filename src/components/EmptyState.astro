@@ -1,0 +1,39 @@
+---
+import type { ContentBlock } from '../lib/types';
+
+interface Props {
+  block?: ContentBlock;
+  headline?: string;
+  body?: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+}
+const { block } = Astro.props;
+const p = (block?.payload ?? {}) as Record<string, string>;
+
+/* An empty screen is an invitation to act, so it always offers a next step
+   and never apologises. Copy lives in the dashboard. */
+const headline = Astro.props.headline ?? p.headline ?? 'Nothing here right now';
+const body = Astro.props.body ?? p.body ?? 'Try another category, or see everything on offer.';
+const ctaLabel = Astro.props.ctaLabel ?? p.cta_label ?? 'Show all deals';
+const ctaHref = Astro.props.ctaHref ?? p.cta_href ?? '/deals';
+---
+
+<div class="empty">
+  <h2>{headline}</h2>
+  <p>{body}</p>
+  {ctaLabel && ctaHref && <a class="btn btn-outline" href={ctaHref}>{ctaLabel}</a>}
+</div>
+
+<style>
+  .empty {
+    text-align: center;
+    padding: var(--pp-space-7) var(--pp-space-4);
+    border: 1px dashed var(--pp-line-strong);
+    border-radius: var(--pp-radius-card);
+    background: var(--pp-surface);
+    display: flex; flex-direction: column; align-items: center; gap: var(--pp-space-2);
+  }
+  .empty h2 { font-size: var(--pp-text-xl); margin: 0; }
+  .empty p { color: var(--pp-muted); margin: 0 0 var(--pp-space-3); }
+</style>

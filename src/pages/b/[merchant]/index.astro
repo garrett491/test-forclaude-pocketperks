@@ -1,0 +1,337 @@
+---
+import Base from '../../../layouts/Base.astro';
+import DealCard from '../../../components/DealCard.astro';
+import MerchantCard from '../../../components/MerchantCard.astro';
+import Gallery from '../../../components/Gallery.astro';
+import EmptyState from '../../../components/EmptyState.astro';
+import { getMerchant, getRelatedMerchants, getSiteChrome, CACHE_PUBLIC } from '../../../lib/queries';
+import {
+  imageUrl, imageSrcSet, initials, openStatus, groupedHours,
+  telHref, directionsHref, formatAddress, displayUrl, dayName,
+} from '../../../lib/format';
+
+const { merchant: slug } = Astro.params;
+const merchant = await getMerchant(slug!);
+
+if (!merchant) {
+  return Astro.rewrite('/404');
+}
+
+Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
+
+const { blocks } = await getSiteChrome();
+const related = await getRelatedMerchants(merchant);
+
+const status = openStatus(merchant.hours);
+const hours = groupedHours(merchant.hours);
+const address = formatAddress(merchant);
+const tel = telHref(merchant);
+const directions = directionsHref(merchant);
+const deals = merchant.deals ?? [];
+
+/**
+ * LocalBusiness structured data, emitted only from fields that are actually
+ * populated. Inventing an aggregateRating or a priceRange we cannot observe
+ * would be invalid markup and a manual-action risk.
+ */
+const localBusiness: Record<string, unknown> = {
+  '@context': 'https://schema.org',
+  '@type': 'LocalBusiness',
+  name: merchant.name,
+  url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}`,
+  ...(merchant.description && { description: merchant.description }),
+  ...(merchant.phone_e164 && { telephone: merchant.phone_e164 }),
+  ...(merchant.website_url && { sameAs: [merchant.website_url, merchant.facebook_url, merchant.instagram_url].filter(Boolean) }),
+  ...(merchant.logo && { image: imageUrl(merchant.logo, 600) }),
+  ...(merchant.address_line1 && {
+    address: {
+      '@type': 'PostalAddress',
+      streetAddress: merchant.address_line1,
+      addressLocality: merchant.city ?? merchant.town?.name,
+      addressRegion: merchant.state_code,
+      postalCode: merchant.postal_code,
+      addressCountry: 'US',
+    },
+  }),
+  ...(merchant.latitude != null && merchant.longitude != null && {
+    geo: { '@type': 'GeoCoordinates', latitude: merchant.latitude, longitude: merchant.longitude },
+  }),
+  ...(merchant.hours?.length && {
+    openingHoursSpecification: merchant.hours
+      .filter((h) => !h.is_closed && h.opens_at && h.closes_at)
+      .map((h) => ({
+        '@type': 'OpeningHoursSpecification',
+        dayOfWeek: `https://schema.org/${dayName(h.day_of_week)}`,
+        opens: h.opens_at,
+        closes: h.closes_at,
+      })),
+  }),
+  ...(deals.length && {
+    makesOffer: deals.map((d) => ({
+      '@type': 'Offer',
+      name: d.headline,
+      ...(d.description && { description: d.description }),
+      ...(d.ends_at && { availabilityEnds: d.ends_at }),
+      url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}/${d.slug}`,
+    })),
+  }),
+};
+
+const cover = merchant.cover;
+---
+
+<Base
+  title={merchant.seo_title ?? `${merchant.name} — Deals & Info`}
+  description={
+    merchant.seo_description ??
+    merchant.tagline ??
+    `${merchant.name}${merchant.town ? ` in ${merchant.town.name}, ${merchant.town.state_code}` : ''}. ${deals.length ? `${deals.length} current ${deals.length === 1 ? 'offer' : 'offers'}, hours, phone and directions.` : 'Hours, phone and directions.'}`
+  }
+  canonicalPath={`/b/${merchant.slug}`}
+  ogImage={imageUrl(cover ?? merchant.logo, 1200, 80)}
+  schema={[localBusiness]}
+  breadcrumbs={[
+    { name: 'Home', href: '/' },
+    { name: 'Businesses', href: '/businesses' },
+    { name: merchant.name, href: `/b/${merchant.slug}` },
+  ]}
+>
+  <article class="profile" data-merchant-id={merchant.id} data-track-merchant-view>
+    {cover && (
+      <div class="cover">
+        <img
+          src={imageUrl(cover, 1400, 70)}
+          srcset={imageSrcSet(cover, 900)}
+          sizes="100vw"
+          alt={cover.alt_text || ''}
+          width="1400" height="440"
+          fetchpriority="high" decoding="async"
+        />
+      </div>
+    )}
+
+    <header class={`head ${cover ? 'has-cover' : ''}`}>
+      <div class="wrap head-inner">
+        <div class="identity">
+          <div class="logo">
+            {merchant.logo ? (
+              <img
+                src={imageUrl(merchant.logo, 200)}
+                srcset={imageSrcSet(merchant.logo, 100)}
+                alt={merchant.logo.alt_text || merchant.name}
+                width="100" height="100" fetchpriority="high" decoding="async"
+              />
+            ) : (
+              <span class="logo-fallback" aria-hidden="true">{initials(merchant.name)}</span>
+            )}
+          </div>
+
+          <div class="identity-text">
+            <h1>{merchant.name}</h1>
+            <p class="sub">
+              {merchant.category && <a href={`/deals?category=${merchant.category.slug}`}>{merchant.category.name}</a>}
+              {merchant.town && <> · <a href={`/${merchant.town.slug}`}>{merchant.town.name}, {merchant.town.state_code}</a></>}
+            </p>
+            {status && <p class={`status ${status.isOpen ? 'is-open' : ''}`}>{status.label}</p>}
+            {merchant.tagline && <p class="tagline">{merchant.tagline}</p>}
+          </div>
+        </div>
+
+        {/*
+          Actions, ordered by how directly each one moves a customer toward
+          the door. Every one is a measurable intent event, and every one is
+          a real link that works without JavaScript.
+        */}
+        <div class="actions">
+          {tel && (
+            <a class="btn btn-primary" href={tel}
+               data-track="call_click" data-merchant={merchant.id}>
+              Call {merchant.phone_display}
+            </a>
+          )}
+          {directions && (
+            <a class="btn btn-outline" href={directions} target="_blank" rel="noopener noreferrer"
+               data-track="directions_click" data-merchant={merchant.id}>
+              Get directions
+            </a>
+          )}
+          {merchant.website_url && (
+            <a class="btn btn-outline" href={merchant.website_url} target="_blank" rel="noopener noreferrer"
+               data-track="website_click" data-merchant={merchant.id}>
+              Visit website
+            </a>
+          )}
+        </div>
+      </div>
+    </header>
+
+    <div class="wrap body-grid">
+      <div class="main-col">
+        <section aria-labelledby="deals-title">
+          <h2 id="deals-title">
+            {deals.length
+              ? `All ${deals.length} current ${deals.length === 1 ? 'offer' : 'offers'}`
+              : 'Offers'}
+          </h2>
+          {deals.length ? (
+            <div class="grid">
+              {deals.map((deal, i) => (
+                <DealCard deal={{ ...deal, merchant }} priority={i === 0} showMerchant={false} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState block={blocks['empty.merchant_no_deals']} ctaLabel="" ctaHref="" />
+          )}
+        </section>
+
+        {/* Photos supplied during onboarding, not scraped. Placed after the
+            deals, because someone landing here came for an offer first. */}
+        <Gallery items={merchant.gallery ?? []} businessName={merchant.name} />
+
+        {merchant.description && (
+          <section aria-labelledby="about-title" class="about">
+            <h2 id="about-title">About {merchant.name}</h2>
+            <p>{merchant.description}</p>
+          </section>
+        )}
+      </div>
+
+      <aside class="side-col" aria-label="Business details">
+        <div class="info-card card">
+          <h2 class="info-title">Details</h2>
+          <dl class="info-list">
+            {address && (
+              <div>
+                <dt>Address</dt>
+                <dd>
+                  {directions ? (
+                    <a href={directions} target="_blank" rel="noopener noreferrer"
+                       data-track="directions_click" data-merchant={merchant.id}>{address}</a>
+                  ) : address}
+                </dd>
+              </div>
+            )}
+            {tel && (
+              <div>
+                <dt>Phone</dt>
+                <dd><a href={tel} data-track="call_click" data-merchant={merchant.id}>{merchant.phone_display}</a></dd>
+              </div>
+            )}
+            {merchant.website_url && (
+              <div>
+                <dt>Website</dt>
+                <dd>
+                  <a href={merchant.website_url} target="_blank" rel="noopener noreferrer"
+                     data-track="website_click" data-merchant={merchant.id}>
+                    {displayUrl(merchant.website_url)}
+                  </a>
+                </dd>
+              </div>
+            )}
+            {hours.length > 0 && (
+              <div>
+                <dt>Hours</dt>
+                <dd>
+                  <ul class="list-plain hours">
+                    {hours.map((line) => <li>{line}</li>)}
+                  </ul>
+                </dd>
+              </div>
+            )}
+            {(merchant.facebook_url || merchant.instagram_url) && (
+              <div>
+                <dt>Social</dt>
+                <dd class="row">
+                  {merchant.facebook_url && (
+                    <a href={merchant.facebook_url} target="_blank" rel="noopener noreferrer"
+                       data-track="website_click" data-merchant={merchant.id}>Facebook</a>
+                  )}
+                  {merchant.instagram_url && (
+                    <a href={merchant.instagram_url} target="_blank" rel="noopener noreferrer"
+                       data-track="website_click" data-merchant={merchant.id}>Instagram</a>
+                  )}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      </aside>
+    </div>
+
+    {related.length > 0 && (
+      <section class="wrap section" aria-labelledby="related-title">
+        <h2 id="related-title">More local businesses</h2>
+        <div class="grid">
+          {related.map((m) => <MerchantCard merchant={m} />)}
+        </div>
+      </section>
+    )}
+  </article>
+</Base>
+
+<style>
+  .cover { background: var(--pp-deep); aspect-ratio: 32 / 10; max-height: 320px; overflow: hidden; }
+  .cover img { width: 100%; height: 100%; object-fit: cover; }
+
+  .head { background: var(--pp-surface); border-bottom: 1px solid var(--pp-line); }
+  .head-inner { padding-block: var(--pp-space-5); display: flex; flex-direction: column; gap: var(--pp-space-4); }
+  @media (min-width: 48rem) {
+    .head-inner { flex-direction: row; align-items: flex-end; justify-content: space-between; }
+  }
+  .head.has-cover .head-inner { padding-top: var(--pp-space-4); }
+
+  .identity { display: flex; gap: var(--pp-space-4); align-items: flex-start; }
+  .logo {
+    width: 96px; height: 96px; flex-shrink: 0;
+    border-radius: var(--pp-radius-card);
+    border: 1px solid var(--pp-line);
+    background: var(--pp-white);
+    display: grid; place-items: center; overflow: hidden;
+    box-shadow: var(--pp-shadow-card);
+  }
+  .head.has-cover .logo { margin-top: -46px; }
+  /* contain, never cover — a cropped logo is a broken logo. */
+  /* contain plus real breathing room. A logo with its own whitespace still
+     needs padding here, or the mark touches the tile edge and reads as
+     cropped even though nothing was cut. */
+  .logo img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
+  .logo-fallback {
+    width: 100%; height: 100%; display: grid; place-items: center;
+    background: var(--pp-deep); color: var(--pp-lime-300);
+    font-family: var(--pp-font-display); font-size: 1.9rem;
+  }
+
+  .identity-text h1 { margin-bottom: var(--pp-space-1); }
+  .sub { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0 0 var(--pp-space-2); }
+  .status { font-size: var(--pp-text-sm); font-weight: 700; color: var(--pp-muted); margin: 0; }
+  .status.is-open { color: var(--pp-green); }
+  .tagline { margin: var(--pp-space-2) 0 0; color: var(--pp-muted); }
+
+  .actions { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; }
+  /* On a phone the actions become a full-width stack: one-thumb reachable,
+     no target under 44px. */
+  @media (max-width: 30rem) {
+    .actions { flex-direction: column; }
+    .actions :global(.btn) { width: 100%; }
+  }
+
+  .body-grid {
+    display: grid; gap: var(--pp-space-6);
+    grid-template-columns: 1fr;
+    padding-block: var(--pp-space-6);
+  }
+  @media (min-width: 60rem) { .body-grid { grid-template-columns: minmax(0, 1fr) 20rem; } }
+
+  .main-col { display: flex; flex-direction: column; gap: var(--pp-space-6); }
+  .about p { color: var(--pp-muted); }
+
+  .info-card { padding: var(--pp-space-4); gap: var(--pp-space-3); }
+  .info-title { font-size: var(--pp-text-lg); margin: 0; }
+  .info-list { margin: 0; display: flex; flex-direction: column; gap: var(--pp-space-3); }
+  .info-list dt {
+    font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted);
+    letter-spacing: 0.03em;
+  }
+  .info-list dd { margin: 0.15rem 0 0; font-size: var(--pp-text-sm); }
+  .hours { display: flex; flex-direction: column; gap: 0.1rem; font-variant-numeric: tabular-nums; }
+</style>

@@ -1,0 +1,252 @@
+---
+import type { Deal } from '../lib/types';
+import { imageUrl, imageDimensions, expiryLabel, initials } from '../lib/format';
+
+interface Props {
+  deals: Deal[];
+  townName?: string | null;
+  /** Seconds for one card to cross the screen. Set in admin Settings. */
+  seconds?: number;
+  autoplay?: boolean;
+}
+
+const { deals, townName, seconds = 8, autoplay = true } = Astro.props;
+if (!deals.length) return new Response(null, { status: 200 });
+
+/**
+ * The Premium placement.
+ *
+ * Rebuilt rather than copied from the old site, which auto-scrolled an
+ * infinite CSS conveyor with no controls, no pause, and no respect for
+ * prefers-reduced-motion — and which computed its animation duration from
+ * the slide count, so a single Premium business produced a 4-second loop of
+ * the same card sliding past twice.
+ *
+ * This one is a scroll-snap track. It advances on a timer, but the timer
+ * stops on hover, on focus, on touch, when the tab is hidden, and entirely
+ * for anyone who has asked for reduced motion. Arrows and dots are real
+ * buttons, and swiping works because it is native scrolling rather than a
+ * transform.
+ */
+const slideWidth = 560;
+---
+
+<section class="carousel" aria-labelledby="carousel-title" data-carousel
+         data-seconds={String(seconds)} data-autoplay={String(autoplay)}>
+  <div class="wrap">
+    <div class="carousel-head">
+      <h2 id="carousel-title">
+        Featured businesses{townName ? ` in ${townName}` : ''}
+      </h2>
+
+
+    </div>
+  </div>
+
+  <div class="track-wrap">
+    <ul class="track list-plain" data-carousel-track
+        aria-label="Featured businesses">
+      {deals.map((deal, index) => {
+        const merchant = deal.merchant!;
+        const art = deal.image ?? merchant.cover ?? merchant.logo;
+        const dims = imageDimensions(art, slideWidth);
+        const expiry = expiryLabel(deal);
+        const more = deal.sibling_count ?? 0;
+        return (
+          <li class="slide" data-slide data-deal-id={deal.id} data-merchant-id={merchant.id}
+              data-track-impression>
+            <a class="slide-link" href={`/b/${merchant.slug}/${deal.slug}`}>
+              <div class="slide-art">
+                {art ? (
+                  <img src={imageUrl(art, slideWidth)} alt={art.alt_text || merchant.name}
+                       width={dims.width} height={dims.height}
+                       loading={index === 0 ? 'eager' : 'lazy'}
+                       fetchpriority={index === 0 ? 'high' : 'auto'} decoding="async" />
+                ) : (
+                  <div class="art-fallback" aria-hidden="true">{initials(merchant.name)}</div>
+                )}
+                <span class="badge badge-deep slide-badge">Featured</span>
+              </div>
+
+              <div class="slide-body">
+                <p class="slide-merchant">{merchant.name}</p>
+                <p class="slide-headline">{deal.headline}</p>
+                <p class="slide-meta">
+                  {expiry && <span class="slide-expiry">{expiry}</span>}
+                  <span class="slide-cta">See deal</span>
+                </p>
+              </div>
+            </a>
+
+            {/* A sibling of the slide link, never nested inside it — an
+                anchor within an anchor is invalid and browsers resolve it
+                unpredictably. */}
+            {more > 0 && (
+              <a class="more-band more-band-inset" href={`/b/${merchant.slug}`}>
+                <span class="mb-text">
+                  See {more} more {more === 1 ? 'deal' : 'deals'} from {merchant.name}
+                </span>
+                <span class="mb-arrow" aria-hidden="true">→</span>
+              </a>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+
+  {/* Controls sit below the strip, spelled out rather than left as an icon.
+      "Pause slideshow" is unambiguous in a way that two vertical bars is
+      not, and below is where a thumb already is on a phone. */}
+  <div class="wrap">
+    <div class="carousel-controls">
+      <button class="pause-btn" type="button" data-carousel-pause aria-pressed="false">
+        <span aria-hidden="true" data-pause-icon>❚❚</span>
+        <span data-pause-label>Pause slideshow</span>
+      </button>
+
+      <div class="manual-controls" data-manual-controls hidden>
+        <button class="nav-btn" type="button" data-carousel-prev aria-label="Previous featured business">
+          <span aria-hidden="true">‹</span>
+        </button>
+        <button class="nav-btn" type="button" data-carousel-next aria-label="Next featured business">
+          <span aria-hidden="true">›</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <ul class="carousel-index list-plain">
+      {deals.map((deal) => (
+        <li>
+          <a href={`/b/${deal.merchant?.slug}`}>{deal.merchant?.name}</a>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .carousel {
+    background: var(--pp-deep);
+    padding-block: var(--pp-space-5) var(--pp-space-4);
+    border-block: var(--pp-stitch);
+  }
+  .carousel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--pp-space-4); margin-bottom: var(--pp-space-4); flex-wrap: wrap;
+  }
+  .carousel-head h2 {
+    color: var(--pp-white); margin: 0; font-size: var(--pp-text-xl);
+  }
+
+  .carousel-controls {
+    display: flex; gap: var(--pp-space-3); align-items: center;
+    justify-content: center; flex-wrap: wrap;
+    padding-top: var(--pp-space-2);
+  }
+  .manual-controls { display: flex; gap: var(--pp-space-2); }
+  .manual-controls[hidden] { display: none; }
+  .pause-btn {
+    display: inline-flex; align-items: center; gap: var(--pp-space-2);
+    min-height: var(--pp-tap-min); padding-inline: var(--pp-space-4);
+    background: transparent; color: var(--pp-white);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: var(--pp-radius-chip);
+    font-size: var(--pp-text-sm); font-weight: 600; cursor: pointer;
+  }
+  .pause-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: var(--pp-accent); }
+  .pause-btn[aria-pressed='true'] { background: var(--pp-accent); color: var(--pp-ink); border-color: var(--pp-accent); }
+  .nav-btn {
+    width: var(--pp-tap-min); height: var(--pp-tap-min);
+    display: grid; place-items: center;
+    border-radius: 50%; cursor: pointer;
+    background: transparent; color: var(--pp-white);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    font-size: 1.1rem; line-height: 1;
+  }
+  .nav-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: var(--pp-lime); }
+  .nav-btn[aria-pressed='true'] { background: var(--pp-lime); color: var(--pp-ink); border-color: var(--pp-lime); }
+
+  /* Transform-driven so the drift runs on the compositor: it does not cost
+     battery, and it does not stutter while the page is being scrolled. */
+  .track-wrap { overflow: hidden; }
+  .track {
+    display: flex; gap: var(--pp-space-4);
+    /* Promoted to its own layer so the drift never repaints the page
+       underneath it while someone is scrolling. */
+    backface-visibility: hidden;
+    padding-inline: max(var(--pp-space-4), calc((100vw - 1180px) / 2 + var(--pp-space-4)));
+    padding-block: var(--pp-space-1) var(--pp-space-3);
+    will-change: transform;
+  }
+
+  .slide {
+    /* Sized so the next card peeks in at the edge on a phone. That overhang
+       is what tells a thumb there is more to the right. */
+    flex: 0 0 min(34rem, 82vw);
+    /* Vertical page scrolling wins over horizontal gestures here, so the
+       carousel never fights the page. */
+    touch-action: pan-y;
+    background: var(--pp-surface);
+    border-radius: var(--pp-radius-card);
+    overflow: hidden;
+    box-shadow: var(--pp-shadow-lift);
+  }
+  .slide { display: flex; flex-direction: column; }
+  .slide-link { display: grid; text-decoration: none; color: var(--pp-text); flex: 1; }
+  @media (min-width: 34rem) { .slide-link { grid-template-columns: 15rem 1fr; } }
+
+  .slide-art { position: relative; aspect-ratio: 16 / 10; background: var(--pp-deep-050); }
+  @media (min-width: 34rem) { .slide-art { aspect-ratio: auto; height: 100%; min-height: 11rem; } }
+  .slide-art img { width: 100%; height: 100%; object-fit: cover; }
+  .art-fallback {
+    width: 100%; height: 100%; display: grid; place-items: center;
+    background: var(--pp-deep); color: var(--pp-lime-300);
+    font-family: var(--pp-font-display); font-size: 2.5rem;
+  }
+  .slide-badge { position: absolute; top: var(--pp-space-3); left: var(--pp-space-3); }
+
+  .slide-body {
+    padding: var(--pp-space-4);
+    display: flex; flex-direction: column; gap: var(--pp-space-2);
+    justify-content: center;
+  }
+  .slide-merchant {
+    margin: 0; font-size: var(--pp-text-xs); font-weight: 700;
+    color: var(--pp-green); letter-spacing: 0.02em;
+  }
+  .slide-headline {
+    margin: 0; font-family: var(--pp-font-display);
+    font-size: var(--pp-text-xl); line-height: var(--pp-leading-tight);
+  }
+  .slide-meta {
+    margin: 0; display: flex; gap: var(--pp-space-3); align-items: center;
+    font-size: var(--pp-text-xs); flex-wrap: wrap;
+  }
+  .slide-expiry { color: var(--pp-muted); font-weight: 600; }
+  .slide-cta { color: var(--pp-green); font-weight: 700; margin-left: auto; }
+  .slide:hover .slide-cta { text-decoration: underline; }
+
+  .carousel-index {
+    display: flex; gap: var(--pp-space-2) var(--pp-space-4); flex-wrap: wrap;
+    padding-top: var(--pp-space-2);
+  }
+  .carousel-index a {
+    color: var(--pp-lime-300); font-size: var(--pp-text-xs); font-weight: 600;
+    min-height: 32px; display: inline-flex; align-items: center;
+  }
+
+  /*
+    On a phone the controls move to the bottom of the strip, where a thumb
+    already is. Top-right is the hardest corner to reach one-handed.
+  */
+  @media (max-width: 34rem) {
+    .carousel-head { flex-direction: column; align-items: flex-start; gap: var(--pp-space-2); }
+    .nav-btn { width: 46px; height: 46px; }
+    .pause-btn { min-height: 46px; }
+  }
+
+  .carousel :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+</style>

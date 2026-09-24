@@ -1,0 +1,264 @@
+---
+import Base from '../../../layouts/Base.astro';
+import DealCard from '../../../components/DealCard.astro';
+import { getDeal, getMerchant, CACHE_PUBLIC } from '../../../lib/queries';
+import {
+  imageUrl, imageSrcSet, expiryLabel, telHref, directionsHref,
+  formatAddress, openStatus, initials,
+} from '../../../lib/format';
+
+const { merchant: merchantSlug, deal: dealSlug } = Astro.params;
+const deal = await getDeal(merchantSlug!, dealSlug!);
+
+if (!deal) {
+  return Astro.rewrite('/404');
+}
+
+Astro.response.headers.set('Cache-Control', CACHE_PUBLIC);
+
+const merchant = (await getMerchant(merchantSlug!)) ?? deal.merchant!;
+const otherDeals = (merchant.deals ?? []).filter((d) => d.id !== deal.id);
+
+const expiry = expiryLabel(deal);
+const tel = telHref(merchant);
+const directions = directionsHref(merchant);
+const address = formatAddress(merchant);
+const status = openStatus(merchant.hours);
+const art = deal.image ?? merchant.cover ?? merchant.logo;
+
+/**
+ * This page is the reason deals now have URLs.
+ *
+ * The old site opened deals in a modal and its share button posted the
+ * homepage link for every offer — the same URL, no title, no image, no
+ * context. Facebook is the primary distribution channel, so a deal that
+ * cannot be linked to individually cannot really be shared at all.
+ */
+const offerSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'Offer',
+  name: deal.headline,
+  ...(deal.description && { description: deal.description }),
+  url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}/${deal.slug}`,
+  ...(deal.starts_at && { validFrom: deal.starts_at }),
+  ...(deal.ends_at && { availabilityEnds: deal.ends_at }),
+  ...(art && { image: imageUrl(art, 1200, 80) }),
+  offeredBy: {
+    '@type': 'LocalBusiness',
+    name: merchant.name,
+    url: `${import.meta.env.PUBLIC_SITE_URL}/b/${merchant.slug}`,
+    ...(merchant.phone_e164 && { telephone: merchant.phone_e164 }),
+  },
+};
+---
+
+<Base
+  title={`${deal.headline} — ${merchant.name}`}
+  description={
+    deal.description ??
+    `${deal.headline} at ${merchant.name}${merchant.town ? ` in ${merchant.town.name}, ${merchant.town.state_code}` : ''}.${expiry ? ` ${expiry}.` : ''}`
+  }
+  canonicalPath={`/b/${merchant.slug}/${deal.slug}`}
+  ogImage={imageUrl(art, 1200, 80)}
+  ogType="article"
+  schema={[offerSchema]}
+  breadcrumbs={[
+    { name: 'Home', href: '/' },
+    { name: 'Businesses', href: '/businesses' },
+    { name: merchant.name, href: `/b/${merchant.slug}` },
+    { name: deal.headline, href: `/b/${merchant.slug}/${deal.slug}` },
+  ]}
+>
+  <article class="deal" data-merchant-id={merchant.id} data-deal-id={deal.id} data-track-deal-open>
+    <div class="wrap deal-grid">
+      <div class="primary">
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <a href={`/b/${merchant.slug}`}>{merchant.name}</a>
+        </nav>
+
+        <h1>{deal.headline}</h1>
+
+        <div class="deal-meta">
+          {deal.badge && <span class={`badge badge-${deal.badge.style_key}`}>{deal.badge.label}</span>}
+          {expiry && <span class="expiry">{expiry}</span>}
+        </div>
+
+        {art && (
+          <img
+            class="deal-art"
+            src={imageUrl(art, 900, 78)}
+            srcset={imageSrcSet(art, 700)}
+            sizes="(min-width: 60rem) 700px, 94vw"
+            alt={art.alt_text || deal.headline}
+            width="900" height="560"
+            fetchpriority="high" decoding="async"
+          />
+        )}
+
+        {deal.description && <p class="desc">{deal.description}</p>}
+
+        {deal.coupon_code && (
+          <div class="stitch-panel code-block">
+            <div>
+              <p class="code-label">Show this code</p>
+              <p class="code-value">{deal.coupon_code}</p>
+            </div>
+            <button
+              class="btn btn-primary" type="button"
+              data-copy-code={deal.coupon_code}
+              data-track="code_copy"
+              data-merchant={merchant.id} data-deal={deal.id}
+            >Copy code</button>
+          </div>
+        )}
+
+        {deal.terms && (
+          <details class="terms">
+            <summary>Terms and conditions</summary>
+            <p>{deal.terms}</p>
+          </details>
+        )}
+
+        {/* Right under the offer, before the terms — the moment someone has
+            decided they like this deal is the moment to say there are more. */}
+        {otherDeals.length > 0 && (
+          <a class="more-band deal-more" href={`/b/${merchant.slug}`}>
+            <span class="mb-text">
+              {merchant.name} has {otherDeals.length} more
+              {otherDeals.length === 1 ? ' deal' : ' deals'} — see them all
+            </span>
+            <span class="mb-arrow" aria-hidden="true">→</span>
+          </a>
+        )}
+
+        <div class="share-row">
+          <button
+            class="btn btn-outline" type="button"
+            data-share data-title={deal.headline} data-merchant={merchant.id} data-deal={deal.id}
+          >Share this deal</button>
+        </div>
+      </div>
+
+      <aside class="redeem" aria-label="How to use this deal">
+        <div class="redeem-card card">
+          <div class="redeem-head">
+            <div class="logo">
+              {merchant.logo ? (
+                <img src={imageUrl(merchant.logo, 120)} alt={merchant.logo.alt_text || merchant.name}
+                     width="56" height="56" loading="lazy" decoding="async" />
+              ) : (
+                <span class="logo-fallback" aria-hidden="true">{initials(merchant.name)}</span>
+              )}
+            </div>
+            <div>
+              <h2><a href={`/b/${merchant.slug}`}>{merchant.name}</a></h2>
+              {status && <p class={`status ${status.isOpen ? 'is-open' : ''}`}>{status.label}</p>}
+            </div>
+          </div>
+
+          <p class="redeem-note">Show this page on your phone when you order. Nothing to print.</p>
+
+          <div class="redeem-actions">
+            {tel && (
+              <a class="btn btn-primary btn-block" href={tel}
+                 data-track="call_click" data-merchant={merchant.id} data-deal={deal.id}>
+                Call {merchant.phone_display}
+              </a>
+            )}
+            {directions && (
+              <a class="btn btn-outline btn-block" href={directions} target="_blank" rel="noopener noreferrer"
+                 data-track="directions_click" data-merchant={merchant.id} data-deal={deal.id}>
+                Get directions
+              </a>
+            )}
+            {merchant.website_url && (
+              <a class="btn btn-outline btn-block" href={merchant.website_url} target="_blank" rel="noopener noreferrer"
+                 data-track="website_click" data-merchant={merchant.id} data-deal={deal.id}>
+                Visit website
+              </a>
+            )}
+          </div>
+
+          {address && <p class="address">{address}</p>}
+        </div>
+      </aside>
+    </div>
+
+    {otherDeals.length > 0 && (
+      <section class="wrap section" aria-labelledby="more-title">
+        <h2 id="more-title">More from {merchant.name}</h2>
+        <div class="grid">
+          {otherDeals.map((d) => <DealCard deal={{ ...d, merchant }} showMerchant={false} />)}
+        </div>
+      </section>
+    )}
+  </article>
+</Base>
+
+<style>
+  .deal-grid {
+    display: grid; gap: var(--pp-space-6);
+    grid-template-columns: 1fr;
+    padding-block: var(--pp-space-5);
+  }
+  @media (min-width: 60rem) {
+    .deal-grid { grid-template-columns: minmax(0, 1fr) 20rem; align-items: start; }
+    /* Sticky so the call button stays reachable while reading the terms. */
+    .redeem { position: sticky; top: 76px; }
+  }
+
+  .crumbs { font-size: var(--pp-text-sm); margin-bottom: var(--pp-space-2); }
+  .deal h1 { margin-bottom: var(--pp-space-3); }
+  .deal-meta { display: flex; gap: var(--pp-space-3); align-items: center; margin-bottom: var(--pp-space-4); }
+  .expiry { font-size: var(--pp-text-sm); font-weight: 600; color: var(--pp-muted); }
+
+  .deal-art {
+    width: 100%; aspect-ratio: 16 / 10; object-fit: cover;
+    border-radius: var(--pp-radius-card); margin-bottom: var(--pp-space-4);
+    background: var(--pp-deep-050);
+  }
+  .desc { font-size: var(--pp-text-lg); }
+
+  .code-block {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--pp-space-4); flex-wrap: wrap;
+    margin: var(--pp-space-4) 0;
+  }
+  .code-label { font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted); margin: 0; }
+  .code-value {
+    font-family: var(--pp-font-display); font-size: var(--pp-text-2xl);
+    color: var(--pp-green); margin: 0; letter-spacing: 0.02em;
+  }
+
+  .terms { margin-block: var(--pp-space-4); font-size: var(--pp-text-sm); }
+  .terms summary {
+    cursor: pointer; font-weight: 600; color: var(--pp-green);
+    min-height: var(--pp-tap-min); display: flex; align-items: center;
+  }
+  .terms p { color: var(--pp-muted); margin-top: var(--pp-space-2); }
+
+  .deal-more { margin-top: var(--pp-space-4); min-height: 52px; font-size: var(--pp-text-base); }
+  .share-row { margin-top: var(--pp-space-4); }
+
+  .redeem-card { padding: var(--pp-space-4); gap: var(--pp-space-4); }
+  .redeem-head { display: flex; gap: var(--pp-space-3); align-items: center; }
+  .redeem-head h2 { font-size: var(--pp-text-lg); margin: 0; }
+  .redeem-head h2 a { color: var(--pp-text); text-decoration: none; }
+  .redeem-head h2 a:hover { color: var(--pp-green); text-decoration: underline; }
+  .logo {
+    width: 56px; height: 56px; flex-shrink: 0; overflow: hidden;
+    border-radius: var(--pp-radius-inset); background: var(--pp-white);
+    border: 1px solid var(--pp-line); display: grid; place-items: center;
+  }
+  .logo img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
+  .logo-fallback {
+    width: 100%; height: 100%; display: grid; place-items: center;
+    background: var(--pp-deep); color: var(--pp-lime-300);
+    font-family: var(--pp-font-display);
+  }
+  .status { font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-muted); margin: 0.2rem 0 0; }
+  .status.is-open { color: var(--pp-green); }
+  .redeem-note { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
+  .redeem-actions { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+  .address { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
+</style>

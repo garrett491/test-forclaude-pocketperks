@@ -1,0 +1,133 @@
+---
+import '../../styles/global.css';
+import '../../styles/admin.css';
+import { getAuthClient, requireAdmin } from '../../lib/admin';
+
+export const prerender = false;
+
+let error: string | null = null;
+// Only ever redirect back inside /admin. An open redirect here would let a
+// crafted link bounce an administrator to an attacker's page after login.
+const requested = Astro.url.searchParams.get('next') ?? '/admin';
+const destination = requested.startsWith('/admin/') || requested === '/admin' ? requested : '/admin';
+
+// Already signed in? Skip the form.
+if (Astro.request.method === 'GET') {
+  const existing = await requireAdmin(Astro.cookies, Astro.request);
+  if (existing) return Astro.redirect(destination, 302);
+}
+
+let notice: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const email = String(form.get('email') ?? '').trim().toLowerCase();
+  const password = String(form.get('password') ?? '');
+  const intent = String(form.get('intent') ?? 'signin');
+
+  if (intent === 'reset') {
+    // Always the same reply, whether or not the address exists. Confirming
+    // which addresses are administrators would be a gift to anyone probing.
+    if (email) {
+      const db = getAuthClient(Astro.cookies, Astro.request);
+      await db.auth.resetPasswordForEmail(email, {
+        redirectTo: `${import.meta.env.PUBLIC_SITE_URL}/admin/login`,
+      });
+    }
+    notice = 'If that address has an account, a reset link is on its way.';
+  } else if (!email || !password) {
+    error = 'Enter your email address and password.';
+  } else {
+    const db = getAuthClient(Astro.cookies, Astro.request);
+    const { data, error: authError } = await db.auth.signInWithPassword({ email, password });
+
+    if (authError || !data.user) {
+      // Deliberately identical whether the address exists or not, so this
+      // form cannot be used to discover which addresses are administrators.
+      error = 'That email address and password do not match.';
+    } else {
+      const { data: profile } = await db
+        .from('profiles').select('id').eq('id', data.user.id).maybeSingle();
+
+      if (!profile) {
+        // Authenticated but not authorised. Having an auth account grants
+        // nothing without a profiles row.
+        await db.auth.signOut();
+        error = 'That account does not have access.';
+      } else {
+        return Astro.redirect(destination, 302);
+      }
+    }
+  }
+}
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sign in — Pocket Perks admin</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&family=Playfair+Display:wght@700&display=swap" />
+  </head>
+  <body class="login-body">
+    <main class="login-card">
+      <img src="/logo.svg" alt="Pocket Perks" width="180" height="41" />
+      <h1>Sign in</h1>
+
+      {error && <p class="form-error" role="alert">{error}</p>}
+
+      {notice && <p class="form-success" role="status">{notice}</p>}
+
+      <form method="post" class="stack">
+        <input type="hidden" name="intent" value="signin" />
+        <div class="field">
+          <label for="email">Email address</label>
+          <input class="input" id="email" name="email" type="email"
+                 autocomplete="username" required autofocus />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input class="input" id="password" name="password" type="password"
+                 autocomplete="current-password" required />
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+      </form>
+
+      <form method="post" class="reset-form">
+        <input type="hidden" name="intent" value="reset" />
+        <input type="hidden" name="email" value="" data-mirror-email />
+        <button class="btn btn-ghost btn-sm" type="submit">Forgot your password?</button>
+      </form>
+
+      <p class="note">
+        Accounts are created in the Supabase dashboard. There is no signup here.
+      </p>
+    </main>
+  </body>
+</html>
+
+<style>
+  .login-body {
+    min-height: 100vh; display: grid; place-items: center;
+    background: var(--pp-deep); padding: var(--pp-space-4);
+  }
+  .login-card {
+    width: min(24rem, 100%);
+    background: var(--pp-surface);
+    border-radius: var(--pp-radius-card);
+    border-left: var(--pp-stitch);
+    padding: var(--pp-space-6);
+    box-shadow: var(--pp-shadow-lift);
+    display: flex; flex-direction: column; gap: var(--pp-space-4);
+  }
+  .login-card img { height: 36px; width: auto; }
+  .login-card h1 { font-size: var(--pp-text-xl); margin: 0; }
+  .note { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: 0; }
+  .reset-form { margin-top: calc(-1 * var(--pp-space-2)); }
+</style>

@@ -1,0 +1,96 @@
+---
+import type { NavItem, SiteSettings } from '../lib/types';
+import type { Branding } from '../lib/branding';
+import NewsletterForm from './NewsletterForm.astro';
+
+interface Props { nav: NavItem[]; settings: SiteSettings; branding: Branding; }
+const { nav, settings, branding } = Astro.props;
+
+const footerNav = nav.filter((n) => n.location === 'footer');
+const sections = [...new Set(footerNav.map((n) => n.section ?? 'More'))];
+
+const email = settings['contact.email'] as string | undefined;
+const phone = settings['contact.phone_display'] as string | undefined;
+const facebook = settings['social.facebook_url'] as string | undefined;
+const instagram = settings['social.instagram_url'] as string | undefined;
+const tagline = settings['site.tagline'] as string | undefined;
+const siteName = (settings['site.name'] as string) ?? 'Pocket Perks';
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src={branding.footerMark} alt={siteName} width="40" height="40" loading="lazy" />
+        {tagline && <p class="tagline">{tagline}</p>}
+        <div class="social row">
+          {facebook && <a href={facebook} target="_blank" rel="noopener noreferrer">Facebook</a>}
+          {instagram && <a href={instagram} target="_blank" rel="noopener noreferrer">Instagram</a>}
+        </div>
+      </div>
+
+      {sections.map((section) => (
+        <nav aria-label={section}>
+          <h2 class="footer-heading">{section}</h2>
+          <ul class="list-plain footer-links">
+            {footerNav.filter((n) => (n.section ?? 'More') === section).map((item) => (
+              <li>
+                <a
+                  href={item.href}
+                  target={item.opens_new_tab ? '_blank' : undefined}
+                  rel={item.opens_new_tab ? 'noopener noreferrer' : undefined}
+                >{item.label}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ))}
+
+      <div class="footer-signup">
+        <NewsletterForm source="footer" settings={settings} compact={true} />
+      </div>
+    </div>
+
+    <div class="footer-base">
+      <p>© {year} Pocket Perks</p>
+      {email && <p><a href={`mailto:${email}`}>{email}</a></p>}
+      {phone && <p><a href={`tel:${phone.replace(/[^0-9+]/g, '')}`}>{phone}</a></p>}
+    </div>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    margin-top: auto;
+    background: var(--pp-footer-bg);
+    color: var(--pp-footer-text);
+    padding-block: var(--pp-space-7) var(--pp-space-5);
+    /* The stitch again, as the seam between page and footer. */
+    border-top: var(--pp-stitch);
+  }
+  .footer-grid { display: grid; gap: var(--pp-space-6); grid-template-columns: 1fr; }
+  @media (min-width: 48rem) {
+    .footer-grid { grid-template-columns: 1.4fr repeat(3, 1fr) 1.6fr; }
+  }
+  .tagline { color: var(--pp-lime-300); font-size: var(--pp-text-sm); margin-block: var(--pp-space-3); }
+  .footer-heading {
+    font-family: var(--pp-font-body); font-size: var(--pp-text-sm);
+    font-weight: 600; color: var(--pp-lime-300); margin-bottom: var(--pp-space-3);
+  }
+  .footer-links { display: flex; flex-direction: column; gap: var(--pp-space-1); }
+  .site-footer a { color: var(--pp-footer-text); text-decoration: none; }
+  .site-footer a:hover { color: var(--pp-lime-300); text-decoration: underline; }
+  .footer-links a, .social a {
+    display: inline-flex; align-items: center; min-height: 36px; font-size: var(--pp-text-sm);
+  }
+  .social { gap: var(--pp-space-4); }
+  .footer-base {
+    display: flex; flex-wrap: wrap; gap: var(--pp-space-4);
+    margin-top: var(--pp-space-6); padding-top: var(--pp-space-4);
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    font-size: var(--pp-text-sm); color: rgba(255, 255, 255, 0.75);
+  }
+  .footer-base p { margin: 0; }
+  .site-footer :global(:focus-visible) { outline-color: var(--pp-lime-300); }
+</style>

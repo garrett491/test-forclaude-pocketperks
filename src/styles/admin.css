@@ -1,0 +1,176 @@
+/* =====================================================================
+   Admin styles.
+   Same tokens as the public site, denser layout. This is a tool, so
+   information density beats whitespace — but the palette stays identical
+   so switching between the two does not feel like two products.
+   ===================================================================== */
+
+.admin-body { background: var(--pp-paper); }
+
+.admin-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--pp-space-4);
+  padding: var(--pp-space-3) var(--pp-space-4);
+  background: var(--pp-deep);
+  border-bottom: var(--pp-stitch);
+  position: sticky; top: 0; z-index: 30;
+}
+.admin-brand { display: flex; align-items: center; gap: var(--pp-space-3); text-decoration: none; }
+.admin-brand img { height: 26px; width: auto; background: var(--pp-white); border-radius: 4px; padding: 3px 6px; }
+.admin-tag {
+  font-size: var(--pp-text-xs); font-weight: 700; color: var(--pp-ink);
+  background: var(--pp-lime); padding: 0.15em 0.6em; border-radius: var(--pp-radius-chip);
+}
+.admin-topbar-right { display: flex; align-items: center; gap: var(--pp-space-3); }
+.admin-who { color: var(--pp-lime-300); font-size: var(--pp-text-sm); font-weight: 600; }
+.admin-topbar .btn-ghost { color: var(--pp-white); }
+.admin-topbar .btn-ghost:hover { background: rgba(255,255,255,0.1); color: var(--pp-white); }
+.admin-topbar .btn-outline { background: transparent; color: var(--pp-white); border-color: rgba(255,255,255,0.35); }
+.admin-topbar .btn-outline:hover { background: rgba(255,255,255,0.1); color: var(--pp-white); }
+.admin-topbar :focus-visible { outline-color: var(--pp-lime-300); }
+
+.admin-shell { display: grid; grid-template-columns: 1fr; }
+@media (min-width: 60rem) { .admin-shell { grid-template-columns: 15rem 1fr; } }
+
+.admin-nav { padding: var(--pp-space-3); border-bottom: 1px solid var(--pp-line); background: var(--pp-surface); }
+@media (min-width: 60rem) {
+  .admin-nav { border-bottom: 0; border-right: 1px solid var(--pp-line); min-height: calc(100vh - 58px); }
+}
+.admin-nav ul { display: flex; gap: var(--pp-space-1); overflow-x: auto; scrollbar-width: none; }
+.admin-nav ul::-webkit-scrollbar { display: none; }
+@media (min-width: 60rem) { .admin-nav ul { flex-direction: column; overflow: visible; } }
+.admin-nav a {
+  display: flex; align-items: center; min-height: var(--pp-tap-min);
+  padding: var(--pp-space-2) var(--pp-space-3);
+  border-radius: var(--pp-radius-inset);
+  color: var(--pp-text); text-decoration: none;
+  font-size: var(--pp-text-sm); font-weight: 600; white-space: nowrap;
+}
+.admin-nav a:hover { background: var(--pp-deep-050); color: var(--pp-green); }
+.admin-nav a[aria-current='page'] { background: var(--pp-deep); color: var(--pp-white); }
+
+.admin-main { padding: var(--pp-space-5) var(--pp-space-4) var(--pp-space-8); min-width: 0; }
+@media (min-width: 60rem) { .admin-main { padding-inline: var(--pp-space-6); } }
+
+.admin-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--pp-space-4); flex-wrap: wrap; margin-bottom: var(--pp-space-5);
+}
+.admin-head h1 { margin: 0; font-size: var(--pp-text-2xl); }
+
+/* ---- Panels ------------------------------------------------------- */
+
+.panel {
+  background: var(--pp-surface);
+  border: 1px solid var(--pp-line);
+  border-radius: var(--pp-radius-card);
+  padding: var(--pp-space-4);
+  box-shadow: var(--pp-shadow-card);
+}
+.panel + .panel { margin-top: var(--pp-space-4); }
+.panel > h2 { font-size: var(--pp-text-lg); margin: 0 0 var(--pp-space-1); }
+.panel > .panel-hint { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0 0 var(--pp-space-4); }
+
+/* ---- Stats -------------------------------------------------------- */
+
+.stat-grid { display: grid; gap: var(--pp-space-3); grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
+.stat {
+  background: var(--pp-surface); border: 1px solid var(--pp-line);
+  border-left: var(--pp-stitch);
+  border-radius: var(--pp-radius-card); padding: var(--pp-space-4);
+}
+.stat-value {
+  font-family: var(--pp-font-display); font-size: var(--pp-text-2xl);
+  color: var(--pp-green); margin: 0; font-variant-numeric: tabular-nums;
+}
+.stat-label { font-size: var(--pp-text-sm); color: var(--pp-muted); margin: 0; }
+.stat-note { font-size: var(--pp-text-xs); color: var(--pp-muted-soft); margin: var(--pp-space-1) 0 0; }
+
+/* ---- Tables ------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; border-radius: var(--pp-radius-card); border: 1px solid var(--pp-line); background: var(--pp-surface); }
+table.admin-table { width: 100%; border-collapse: collapse; font-size: var(--pp-text-sm); }
+.admin-table th, .admin-table td {
+  text-align: left; padding: var(--pp-space-3);
+  border-bottom: 1px solid var(--pp-line); vertical-align: middle;
+}
+.admin-table th {
+  font-size: var(--pp-text-xs); color: var(--pp-muted); font-weight: 700;
+  background: var(--pp-paper); position: sticky; top: 0;
+}
+.admin-table tbody tr:last-child td { border-bottom: 0; }
+.admin-table tbody tr:hover { background: var(--pp-deep-050); }
+.admin-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-table a { font-weight: 600; }
+
+.pill {
+  display: inline-flex; align-items: center; padding: 0.15em 0.65em;
+  border-radius: var(--pp-radius-chip); font-size: var(--pp-text-xs); font-weight: 700;
+}
+.pill-active   { background: var(--pp-lime-100); color: var(--pp-green); }
+.pill-draft    { background: #EDEEEA; color: var(--pp-muted); }
+.pill-paused   { background: #FBF1DC; color: #7A5A15; }
+.pill-archived { background: var(--pp-danger-soft); color: var(--pp-danger); }
+.pill-tier     { background: var(--pp-deep); color: var(--pp-white); }
+
+/* ---- Forms -------------------------------------------------------- */
+
+.form-grid { display: grid; gap: var(--pp-space-4); grid-template-columns: 1fr; }
+@media (min-width: 44rem) { .form-grid.cols-2 { grid-template-columns: 1fr 1fr; } }
+.form-grid .span-2 { grid-column: 1 / -1; }
+
+.field textarea.input { min-height: 7rem; padding-block: var(--pp-space-3); border-radius: var(--pp-radius-inset); resize: vertical; }
+.field select.input { border-radius: var(--pp-radius-inset); }
+.field .req { color: var(--pp-danger); }
+
+.switch { display: flex; align-items: center; gap: var(--pp-space-3); min-height: var(--pp-tap-min); }
+.switch input { width: 20px; height: 20px; accent-color: var(--pp-lime); }
+.switch span { font-size: var(--pp-text-sm); font-weight: 600; }
+
+fieldset.group {
+  border: 1px solid var(--pp-line); border-radius: var(--pp-radius-card);
+  padding: var(--pp-space-4); margin: 0;
+}
+fieldset.group legend {
+  font-size: var(--pp-text-sm); font-weight: 700; color: var(--pp-green);
+  padding-inline: var(--pp-space-2);
+}
+
+.form-actions {
+  display: flex; gap: var(--pp-space-3); flex-wrap: wrap;
+  margin-top: var(--pp-space-5); padding-top: var(--pp-space-4);
+  border-top: 1px solid var(--pp-line);
+}
+.form-actions .spacer { flex: 1; }
+
+.btn-danger { background: var(--pp-danger); color: var(--pp-white); }
+.btn-danger:hover { background: #8F1E17; color: var(--pp-white); }
+
+/* ---- Filter bar ---------------------------------------------------- */
+
+.filter-bar {
+  display: flex; gap: var(--pp-space-2); flex-wrap: wrap; align-items: center;
+  margin-bottom: var(--pp-space-4);
+}
+.filter-bar .input { max-width: 18rem; }
+
+/* ---- Hours editor --------------------------------------------------- */
+
+.hours-rows { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+.hours-row {
+  display: grid; gap: var(--pp-space-2); align-items: center;
+  grid-template-columns: 5.5rem 1fr 1fr auto;
+}
+.hours-row .day { font-size: var(--pp-text-sm); font-weight: 600; }
+.hours-row .input { min-height: 38px; padding-inline: var(--pp-space-3); border-radius: var(--pp-radius-inset); }
+
+.help {
+  font-size: var(--pp-text-sm); color: var(--pp-muted);
+  background: var(--pp-deep-050); border-left: var(--pp-stitch);
+  padding: var(--pp-space-3) var(--pp-space-4); border-radius: var(--pp-radius-inset);
+  margin-bottom: var(--pp-space-4);
+}
+.help p { margin: 0; max-width: none; }
+.help p + p { margin-top: var(--pp-space-2); }
+
+.empty-row { padding: var(--pp-space-6); text-align: center; color: var(--pp-muted); }

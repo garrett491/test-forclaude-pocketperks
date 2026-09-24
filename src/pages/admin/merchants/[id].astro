@@ -1,0 +1,651 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import { str, bool, int, timestamp, toLocalInput, humanError } from '../../../lib/admin';
+import { dayName } from '../../../lib/format';
+import ImageUpload from '../../../components/ImageUpload.astro';
+import { imageUrl } from '../../../lib/format';
+
+export const prerender = false;
+
+const { db, profile } = Astro.locals;
+const { id } = Astro.params;
+const isNew = id === 'new';
+
+let error: string | null = null;
+let success: string | null = null;
+
+const [{ data: categories }, { data: towns }] = await Promise.all([
+  db.from('categories').select('id, name').order('sort_order'),
+  db.from('towns').select('id, name, state_code').order('sort_order'),
+]);
+
+/* ------------------------------------------------------------------ */
+/* Save                                                                */
+/* ------------------------------------------------------------------ */
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? 'save');
+
+  if (intent === 'gallery-add' && !isNew) {
+    const mediaId = str(form, 'gallery_media_id');
+    if (!mediaId) {
+      error = 'Choose a photo first.';
+    } else {
+      const { error: galleryError } = await db.from('merchant_gallery').insert({
+        merchant_id: id,
+        media_id: mediaId,
+        caption: str(form, 'gallery_caption'),
+        sort_order: int(form, 'gallery_sort', 50),
+      });
+      // The tier trigger raises a message already written for a human.
+      if (galleryError) error = humanError(galleryError);
+      else success = 'Photo added.';
+    }
+  } else if (intent === 'gallery-remove' && !isNew) {
+    const rowId = str(form, 'gallery_id');
+    if (rowId) {
+      const { error: removeError } = await db.from('merchant_gallery').delete().eq('id', rowId);
+      if (removeError) error = humanError(removeError);
+      else success = 'Photo removed.';
+    }
+  } else if (intent === 'gallery-order' && !isNew) {
+    const rowId = str(form, 'gallery_id');
+    if (rowId) {
+      await db.from('merchant_gallery').update({
+        sort_order: int(form, 'gallery_sort'),
+        caption: str(form, 'gallery_caption'),
+      }).eq('id', rowId);
+      success = 'Photo updated.';
+    }
+  } else if (intent === 'deal-quick' && !isNew) {
+    /**
+     * Deals added from the business page.
+     *
+     * A deal cannot exist without a business, so this only appears once the
+     * business has been saved. After that you never leave the page: add,
+     * edit and pause the offers right here. The standalone deals list still
+     * exists for seeing everything expiring across all businesses.
+     */
+    const headline = str(form, 'deal_headline');
+    if (!headline) {
+      error = 'Give the deal a headline.';
+    } else {
+      const { error: dealError } = await db.from('deals').insert({
+        merchant_id: id,
+        headline,
+        description: str(form, 'deal_description'),
+        coupon_code: str(form, 'deal_code'),
+        ends_at: timestamp(form, 'deal_ends_at'),
+        status: String(form.get('deal_status') ?? 'draft'),
+      });
+      if (dealError) error = humanError(dealError);
+      else success = 'Deal added.';
+    }
+  } else if (intent === 'deal-status' && !isNew) {
+    const dealId = str(form, 'deal_id');
+    const status = String(form.get('status') ?? '');
+    if (dealId && ['draft', 'active', 'paused', 'archived'].includes(status)) {
+      const { error: statusError } = await db.from('deals').update({ status }).eq('id', dealId);
+      if (statusError) error = humanError(statusError);
+      else success = 'Deal updated.';
+    }
+  } else if (intent === 'archive' && !isNew) {
+    /**
+     * Archive, never delete. The database refuses hard deletes outright, so
+     * this is the only removal path — and it keeps historical analytics and
+     * any link already printed on a flyer intact.
+     */
+    const { error: archiveError } = await db
+      .from('merchants').update({ status: 'archived' }).eq('id', id);
+    if (archiveError) error = humanError(archiveError);
+    else return Astro.redirect(
+      `/admin/merchants?saved=${encodeURIComponent('Business archived. It is no longer on the site.')}`, 302
+    );
+  } else {
+    const name = str(form, 'name');
+    const categoryId = str(form, 'category_id');
+    const townId = str(form, 'town_id');
+
+    // Check the required fields before touching the database, so the
+    // operator gets a plain sentence rather than a constraint name.
+    if (!name) error = 'Give the business a name.';
+    else if (!categoryId) error = 'Pick a category.';
+    else if (!townId) error = 'Pick a town.';
+
+    if (!error) {
+      const payload = {
+        name,
+        tagline: str(form, 'tagline'),
+        description: str(form, 'description'),
+        category_id: categoryId,
+        town_id: townId,
+        address_line1: str(form, 'address_line1'),
+        address_line2: str(form, 'address_line2'),
+        city: str(form, 'city'),
+        state_code: (str(form, 'state_code') ?? 'OH').toUpperCase(),
+        postal_code: str(form, 'postal_code'),
+        latitude: str(form, 'latitude') ? Number(str(form, 'latitude')) : null,
+        longitude: str(form, 'longitude') ? Number(str(form, 'longitude')) : null,
+        phone_display: str(form, 'phone_display'),
+        website_url: str(form, 'website_url'),
+        facebook_url: str(form, 'facebook_url'),
+        instagram_url: str(form, 'instagram_url'),
+        tier: String(form.get('tier') ?? 'standard'),
+        is_featured: bool(form, 'is_featured'),
+        display_priority: int(form, 'display_priority'),
+        status: String(form.get('status') ?? 'draft'),
+        seo_title: str(form, 'seo_title'),
+        seo_description: str(form, 'seo_description'),
+        logo_media_id: str(form, 'logo_media_id'),
+        cover_media_id: str(form, 'cover_media_id'),
+      };
+
+      // Alt text belongs to the image, not the business, so it is written
+      // back to the media row rather than duplicated here.
+      for (const [idKey, altKey] of [['logo_media_id', 'logo_media_id_alt'], ['cover_media_id', 'cover_media_id_alt']]) {
+        const mediaId = str(form, idKey);
+        const alt = str(form, altKey);
+        if (mediaId) await db.from('media').update({ alt_text: alt ?? '' }).eq('id', mediaId);
+      }
+
+      const result = isNew
+        ? await db.from('merchants').insert(payload).select('id').maybeSingle()
+        : await db.from('merchants').update(payload).eq('id', id).select('id').maybeSingle();
+
+      if (result.error) {
+        error = humanError(result.error);
+      } else {
+        const merchantId = result.data?.id ?? id;
+
+        // Hours are replaced wholesale. Seven rows is cheaper to rewrite
+        // than to diff, and it cannot leave a stale day behind.
+        const rows = [];
+        for (let day = 0; day < 7; day++) {
+          const closed = bool(form, `closed_${day}`);
+          const opens = str(form, `opens_${day}`);
+          const closes = str(form, `closes_${day}`);
+          if (closed) rows.push({ merchant_id: merchantId, day_of_week: day, is_closed: true, opens_at: null, closes_at: null });
+          else if (opens && closes) rows.push({ merchant_id: merchantId, day_of_week: day, is_closed: false, opens_at: opens, closes_at: closes });
+        }
+        await db.from('merchant_hours').delete().eq('merchant_id', merchantId);
+        if (rows.length) await db.from('merchant_hours').insert(rows);
+
+        if (isNew) {
+          return Astro.redirect(
+            `/admin/merchants/${merchantId}?saved=${encodeURIComponent('Business created.')}`, 302
+          );
+        }
+        success = 'Saved.';
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Load                                                                */
+/* ------------------------------------------------------------------ */
+
+let merchant: any = null;
+let hours: any[] = [];
+let gallery: any[] = [];
+let merchantDeals: any[] = [];
+
+if (!isNew) {
+  const { data } = await db
+    .from('merchants')
+    .select('*, logo:media!merchants_logo_media_id_fkey ( id, bucket_id, storage_path, alt_text, width, height ), cover:media!merchants_cover_media_id_fkey ( id, bucket_id, storage_path, alt_text, width, height )')
+    .eq('id', id).maybeSingle();
+  if (!data) return Astro.rewrite('/404');
+  merchant = data;
+  const { data: h } = await db.from('merchant_hours').select('*').eq('merchant_id', id);
+  hours = h ?? [];
+
+  const [{ data: g }, { data: d }] = await Promise.all([
+    db.from('merchant_gallery')
+      .select('id, caption, sort_order, media:media ( id, bucket_id, storage_path, alt_text, width, height )')
+      .eq('merchant_id', id).order('sort_order'),
+    db.from('deals')
+      .select('id, headline, status, coupon_code, ends_at, is_featured, created_at')
+      .eq('merchant_id', id).order('status').order('created_at', { ascending: false }),
+  ]);
+  gallery = g ?? [];
+  merchantDeals = d ?? [];
+}
+
+const flash = Astro.url.searchParams.get('saved');
+if (flash && !success) success = decodeURIComponent(flash);
+
+const value = <T,>(key: string, fallback: T | string = ''): T | string =>
+  merchant?.[key] ?? fallback;
+const hoursFor = (day: number) => hours.find((h) => h.day_of_week === day);
+const liveDealCap = merchant?.tier === 'standard' ? 2 : 3;
+const galleryCap = merchant?.tier === 'standard' ? 1 : merchant?.tier === 'pro' ? 3 : 9;
+const liveDealCount = merchantDeals.filter((d: any) => d.status === 'active').length;
+---
+
+<Admin title={isNew ? 'Add business' : merchant.name} profile={profile}>
+  <div slot="actions" class="row">
+    <a class="btn btn-ghost btn-sm" href="/admin/merchants">Back to list</a>
+    {!isNew && merchant.status === 'active' && (
+      <a class="btn btn-outline btn-sm" href={`/b/${merchant.slug}`} target="_blank" rel="noopener">
+        View on site
+      </a>
+    )}
+  </div>
+
+  {success && <p class="form-success" role="status">{success}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  <p class="help">
+    <strong>Draft</strong> means nobody can see it yet. <strong>Live</strong> puts it on
+    the website straight away. A live business needs at least a phone number or
+    a website. This plan allows {liveDealCap} live deals at a time.
+  </p>
+
+  <form method="post" class="stack">
+    <input type="hidden" name="intent" value="save" />
+
+    <fieldset class="group">
+      <legend>The basics</legend>
+      <div class="form-grid cols-2">
+        <div class="field span-2">
+          <label for="name">Business name <span class="req" aria-hidden="true">*</span></label>
+          <input class="input" id="name" name="name" required maxlength="120" value={value('name')} />
+          {!isNew && <p class="hint">Web address: /b/{merchant.slug}</p>}
+        </div>
+
+        <div class="field">
+          <label for="category_id">Category <span class="req" aria-hidden="true">*</span></label>
+          <select class="input" id="category_id" name="category_id" required>
+            <option value="">Choose one</option>
+            {(categories ?? []).map((c: any) => (
+              <option value={c.id} selected={merchant?.category_id === c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="town_id">Town <span class="req" aria-hidden="true">*</span></label>
+          <select class="input" id="town_id" name="town_id" required>
+            <option value="">Choose one</option>
+            {(towns ?? []).map((t: any) => (
+              <option value={t.id} selected={merchant?.town_id === t.id}>{t.name}, {t.state_code}</option>
+            ))}
+          </select>
+        </div>
+
+        <div class="field span-2">
+          <label for="tagline">Tagline</label>
+          <input class="input" id="tagline" name="tagline" maxlength="120" value={value('tagline')} />
+          <p class="hint">One short line. Shown on Pro and Premium listings.</p>
+        </div>
+
+        <div class="field span-2">
+          <label for="description">Description</label>
+          <textarea class="input" id="description" name="description" maxlength="2000">{value('description')}</textarea>
+          <p class="hint">A short paragraph about the business. Appears on their page.</p>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Contact</legend>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="phone_display">Phone</label>
+          <input class="input" id="phone_display" name="phone_display" type="tel" value={value('phone_display')} />
+          <p class="hint">Type it however you like — (330) 555-0142 is fine.</p>
+        </div>
+        <div class="field">
+          <label for="website_url">Website</label>
+          <input class="input" id="website_url" name="website_url" type="url"
+                 placeholder="https://example.com" value={value('website_url')} />
+          <p class="hint">Must start with https://</p>
+        </div>
+        <div class="field">
+          <label for="facebook_url">Facebook page</label>
+          <input class="input" id="facebook_url" name="facebook_url" type="url"
+                 placeholder="https://facebook.com/theirpage" value={value('facebook_url')} />
+        </div>
+        <div class="field">
+          <label for="instagram_url">Instagram</label>
+          <input class="input" id="instagram_url" name="instagram_url" type="url"
+                 placeholder="https://instagram.com/theirhandle" value={value('instagram_url')} />
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Address</legend>
+      <div class="form-grid cols-2">
+        <div class="field span-2">
+          <label for="address_line1">Street address</label>
+          <input class="input" id="address_line1" name="address_line1" value={value('address_line1')} />
+        </div>
+        <div class="field span-2">
+          <label for="address_line2">Suite or unit</label>
+          <input class="input" id="address_line2" name="address_line2" value={value('address_line2')} />
+        </div>
+        <div class="field">
+          <label for="city">City</label>
+          <input class="input" id="city" name="city" value={value('city')} />
+        </div>
+        <div class="field">
+          <label for="postal_code">ZIP</label>
+          <input class="input" id="postal_code" name="postal_code" inputmode="numeric"
+                 pattern="[0-9]{5}(-[0-9]{4})?" value={value('postal_code')} />
+        </div>
+        <div class="field">
+          <label for="latitude">Latitude</label>
+          <input class="input" id="latitude" name="latitude" inputmode="decimal" value={value('latitude')} />
+          <p class="hint">Optional. Makes the directions link exact.</p>
+        </div>
+        <div class="field">
+          <label for="longitude">Longitude</label>
+          <input class="input" id="longitude" name="longitude" inputmode="decimal" value={value('longitude')} />
+        </div>
+        <input type="hidden" name="state_code" value={value('state_code', 'OH')} />
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Opening hours</legend>
+      <p class="hint hours-hint">
+        Leave a day blank if you do not know it. Filling these in lets the site
+        show "Open now" and tells Google when they are open.
+      </p>
+      <div class="hours-rows">
+        {[1, 2, 3, 4, 5, 6, 0].map((day) => {
+          const h = hoursFor(day);
+          return (
+            <div class="hours-row">
+              <span class="day" id={`day-${day}`}>{dayName(day)}</span>
+              <input class="input" type="time" name={`opens_${day}`} value={h?.opens_at?.slice(0, 5) ?? ''}
+                     aria-label={`${dayName(day)} opening time`} />
+              <input class="input" type="time" name={`closes_${day}`} value={h?.closes_at?.slice(0, 5) ?? ''}
+                     aria-label={`${dayName(day)} closing time`} />
+              <label class="switch">
+                <input type="checkbox" name={`closed_${day}`} checked={h?.is_closed ?? false} />
+                <span>Closed</span>
+              </label>
+            </div>
+          );
+        })}
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Images</legend>
+      <p class="hint hours-hint">
+        The logo appears on cards and at the top of their page. The cover photo
+        is the wide banner. Both are optional — without a logo the site shows
+        their initials on a green tile rather than a broken image.
+      </p>
+      <div class="form-grid cols-2">
+        <ImageUpload
+          name="logo_media_id" label="Logo" aspect="square" maxEdge={600}
+          current={merchant?.logo ?? null}
+          hint="A square-ish logo works best. It is never cropped."
+        />
+        <ImageUpload
+          name="cover_media_id" label="Cover photo" aspect="wide" maxEdge={1600}
+          current={merchant?.cover ?? null}
+          hint="A wide photo of the storefront, the food, the work — anything real."
+        />
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Plan and placement</legend>
+      <div class="form-grid cols-2">
+        <div class="field">
+          <label for="tier">Plan</label>
+          <select class="input" id="tier" name="tier">
+            <option value="standard" selected={value('tier', 'standard') === 'standard'}>Standard — $59, 2 deals</option>
+            <option value="pro" selected={value('tier') === 'pro'}>Pro — $89, 3 deals</option>
+            <option value="premium" selected={value('tier') === 'premium'}>Premium — $119, 3 deals + featured</option>
+          </select>
+          <p class="hint">The plan controls how many deals they can run. Changing it takes effect immediately.</p>
+        </div>
+
+        <div class="field">
+          <label for="status">Status</label>
+          <select class="input" id="status" name="status">
+            <option value="draft" selected={value('status', 'draft') === 'draft'}>Draft — hidden</option>
+            <option value="active" selected={value('status') === 'active'}>Live — on the site</option>
+            <option value="paused" selected={value('status') === 'paused'}>Paused — temporarily hidden</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="display_priority">Sort priority</label>
+          <input class="input" id="display_priority" name="display_priority" type="number"
+                 value={value('display_priority', 0)} />
+          <p class="hint">Higher shows first. Leave at 0 unless you need to push someone up.</p>
+        </div>
+
+        <div class="field">
+          <label class="switch">
+            <input type="checkbox" name="is_featured" checked={value('is_featured', false)} />
+            <span>Featured</span>
+          </label>
+          <p class="hint">
+            Featured is a Premium benefit — the homepage row and the badge.
+            You can switch it on for anyone if you are comping placement.
+          </p>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Search engine listing</legend>
+      <p class="hint hours-hint">Leave both blank and sensible defaults are generated from the business name and details.</p>
+      <div class="form-grid">
+        <div class="field">
+          <label for="seo_title">Page title</label>
+          <input class="input" id="seo_title" name="seo_title" maxlength="70" value={value('seo_title')} />
+        </div>
+        <div class="field">
+          <label for="seo_description">Description in Google results</label>
+          <textarea class="input" id="seo_description" name="seo_description" maxlength="300">{value('seo_description')}</textarea>
+          <p class="hint">Aim for about 155 characters.</p>
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">
+        {isNew ? 'Create business' : 'Save changes'}
+      </button>
+      <a class="btn btn-ghost" href="/admin/merchants">Cancel</a>
+      <span class="spacer"></span>
+    </div>
+  </form>
+
+  {!isNew && (
+    <section class="panel">
+      <h2>Deals for {merchant.name}</h2>
+      <p class="panel-hint">
+        Add and manage this business's offers without leaving the page.
+        This plan allows {liveDealCap} live at once — {liveDealCount} running now.
+      </p>
+
+      {merchantDeals.length > 0 && (
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr><th scope="col">Deal</th><th scope="col">Status</th><th scope="col">Ends</th><th scope="col"></th></tr>
+            </thead>
+            <tbody>
+              {merchantDeals.map((d: any) => (
+                <tr>
+                  <td><a href={`/admin/deals/${d.id}`}>{d.headline}</a></td>
+                  <td>
+                    <form method="post" class="inline-form">
+                      <input type="hidden" name="intent" value="deal-status" />
+                      <input type="hidden" name="deal_id" value={d.id} />
+                      <select class="input tiny" name="status" aria-label={`Status for ${d.headline}`}>
+                        {['draft', 'active', 'paused', 'archived'].map((st) => (
+                          <option value={st} selected={d.status === st}>{st}</option>
+                        ))}
+                      </select>
+                      <button class="btn btn-outline btn-sm" type="submit">Set</button>
+                    </form>
+                  </td>
+                  <td>{d.ends_at ? new Date(d.ends_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'no end date'}</td>
+                  <td><a href={`/admin/deals/${d.id}`}>Edit fully</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <form method="post" class="add-form">
+        <input type="hidden" name="intent" value="deal-quick" />
+        <h3>Add a deal</h3>
+        <div class="form-grid cols-2">
+          <div class="field span-2">
+            <label for="deal_headline">Headline</label>
+            <input class="input" id="deal_headline" name="deal_headline" required
+                   maxlength="120" placeholder="$10 off any large pizza" />
+          </div>
+          <div class="field span-2">
+            <label for="deal_description">Details</label>
+            <textarea class="input" id="deal_description" name="deal_description" maxlength="1000"></textarea>
+          </div>
+          <div class="field">
+            <label for="deal_code">Coupon code</label>
+            <input class="input" id="deal_code" name="deal_code" maxlength="24"
+                   pattern="[A-Za-z0-9._-]{2,24}" placeholder="Optional" />
+          </div>
+          <div class="field">
+            <label for="deal_ends_at">Ends</label>
+            <input class="input" id="deal_ends_at" name="deal_ends_at" type="datetime-local" />
+            <p class="hint">Leave blank to run until you stop it.</p>
+          </div>
+          <div class="field">
+            <label for="deal_status">Status</label>
+            <select class="input" id="deal_status" name="deal_status">
+              <option value="draft">Draft — hidden</option>
+              <option value="active">Live — publish it now</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">Add deal</button></div>
+        <p class="hint">Images, terms, badges and scheduling are on the full deal page.</p>
+      </form>
+    </section>
+  )}
+
+  {!isNew && (
+    <section class="panel">
+      <h2>Photo gallery</h2>
+      <p class="panel-hint">
+        Photos you collect when you sign the business — the storefront, the
+        food, the work. This plan includes {galleryCap} {galleryCap === 1 ? 'photo' : 'photos'};
+        {' '}{gallery.length} used.
+      </p>
+
+      {gallery.length > 0 && (
+        <ul class="gallery-admin list-plain">
+          {gallery.map((row: any) => (
+            <li>
+              <img src={imageUrl(row.media)} alt={row.media?.alt_text || ''} width="120" height="90" loading="lazy" />
+              <form method="post" class="gallery-row">
+                <input type="hidden" name="intent" value="gallery-order" />
+                <input type="hidden" name="gallery_id" value={row.id} />
+                <div class="field">
+                  <label class="sr-only" for={`cap-${row.id}`}>Caption</label>
+                  <input class="input tiny" id={`cap-${row.id}`} name="gallery_caption"
+                         value={row.caption ?? ''} placeholder="Caption (optional)" maxlength="160" />
+                </div>
+                <div class="field">
+                  <label class="sr-only" for={`ord-${row.id}`}>Order</label>
+                  <input class="input tiny num-input" id={`ord-${row.id}`} name="gallery_sort"
+                         type="number" value={row.sort_order} />
+                </div>
+                <button class="btn btn-outline btn-sm" type="submit">Save</button>
+              </form>
+              <form method="post" data-confirm-delete>
+                <input type="hidden" name="intent" value="gallery-remove" />
+                <input type="hidden" name="gallery_id" value={row.id} />
+                <button class="btn btn-ghost btn-sm danger-text" type="submit">Remove</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {gallery.length < galleryCap ? (
+        <form method="post" class="add-form">
+          <input type="hidden" name="intent" value="gallery-add" />
+          <h3>Add a photo</h3>
+          <ImageUpload name="gallery_media_id" label="Photo" aspect="wide" maxEdge={1600}
+                       hint="A real photo of the place, the food or the work beats a stock image." />
+          <div class="form-grid cols-2">
+            <div class="field">
+              <label for="gallery_caption">Caption</label>
+              <input class="input" id="gallery_caption" name="gallery_caption" maxlength="160" />
+            </div>
+            <div class="field">
+              <label for="gallery_sort">Order</label>
+              <input class="input" id="gallery_sort" name="gallery_sort" type="number" value={gallery.length * 10} />
+            </div>
+          </div>
+          <div class="form-actions"><button class="btn btn-primary" type="submit">Add photo</button></div>
+        </form>
+      ) : (
+        <p class="help">
+          This plan's {galleryCap} {galleryCap === 1 ? 'photo' : 'photos'} are used.
+          Remove one, or move the business up a plan for more.
+        </p>
+      )}
+    </section>
+  )}
+
+  {!isNew && merchant.status !== 'archived' && (
+    <div class="panel danger-zone">
+      <h2>Archive this business</h2>
+      <p class="panel-hint">
+        Archiving removes {merchant.name} and all their deals from the website
+        immediately. Their past reporting is kept, and you can set the status
+        back to Live at any time. Nothing is permanently deleted.
+      </p>
+      {/* Separate form so an archive can never be triggered by pressing
+          Enter in a text field on the main form. */}
+      <form method="post" data-confirm-archive>
+        <input type="hidden" name="intent" value="archive" />
+        <button class="btn btn-danger" type="submit">Archive {merchant.name}</button>
+      </form>
+    </div>
+  )}
+</Admin>
+
+<style>
+  .hours-hint { margin-bottom: var(--pp-space-3); }
+  .inline-form { display: inline-flex; gap: var(--pp-space-2); align-items: center; }
+  .input.tiny { min-height: 34px; padding: 0.2rem 0.55rem; border-radius: var(--pp-radius-inset); font-size: var(--pp-text-sm); }
+  .input.tiny.num-input { max-width: 5rem; text-align: right; }
+  .add-form { margin-top: var(--pp-space-5); padding-top: var(--pp-space-4); border-top: 1px solid var(--pp-line); }
+  .add-form h3 { font-size: var(--pp-text-base); margin-bottom: var(--pp-space-3); }
+  .danger-text { color: var(--pp-danger); }
+
+  .gallery-admin { display: flex; flex-direction: column; gap: var(--pp-space-3); }
+  .gallery-admin li {
+    display: flex; gap: var(--pp-space-3); align-items: center; flex-wrap: wrap;
+    padding: var(--pp-space-3); background: var(--pp-paper);
+    border-radius: var(--pp-radius-inset);
+  }
+  .gallery-admin img {
+    width: 120px; height: 90px; object-fit: cover;
+    border-radius: var(--pp-radius-inset); flex-shrink: 0;
+  }
+  .gallery-row { display: flex; gap: var(--pp-space-2); align-items: flex-end; flex: 1; flex-wrap: wrap; }
+  .gallery-row .field { flex: 1; min-width: 8rem; }
+
+  .danger-zone { margin-top: var(--pp-space-6); border-color: var(--pp-danger-line); }
+  .danger-zone h2 { color: var(--pp-danger); }
+</style>
+

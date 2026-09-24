@@ -1,0 +1,139 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { getSiteChrome, getTowns } from '../lib/queries';
+import { resolveTheme, themeCss, fontHref } from '../lib/theme';
+import { getBranding } from '../lib/branding';
+import { resolveTownContext } from '../lib/location';
+
+interface Props {
+  title: string;
+  description?: string;
+  /** Path only, e.g. "/b/crossroads-pizza". Resolved against the site URL. */
+  canonicalPath?: string;
+  ogImage?: string | null;
+  ogType?: 'website' | 'article';
+  noindex?: boolean;
+  /** JSON-LD objects. Only emit markup describing what is actually on the page. */
+  schema?: Record<string, unknown>[];
+  breadcrumbs?: { name: string; href: string }[];
+  /** Set by /[town] so the header agrees with the page being viewed. */
+  pathTownSlug?: string;
+}
+
+const {
+  title, description, canonicalPath, ogImage,
+  ogType = 'website', noindex = false, schema = [], breadcrumbs = [], pathTownSlug,
+} = Astro.props;
+
+const { settings, nav, blocks } = await getSiteChrome();
+const [branding, towns] = await Promise.all([getBranding(settings), getTowns()]);
+
+// One rule for which town is being viewed, shared by the header, the
+// carousel, the directory and the search. Pages that filter by it must send
+// Vary: Cookie so the CDN does not serve one visitor's town to the next.
+const townContext = resolveTownContext(Astro.url, Astro.cookies, towns, pathTownSlug);
+if (towns.length > 1) Astro.response.headers.append('Vary', 'Cookie');
+
+// Colours, fonts and sizes chosen on the admin Design page. Emitted as a
+// style element, never a script, so the strict script-src policy is
+// untouched.
+const theme = resolveTheme(settings['theme.tokens']);
+const themeStyles = themeCss(theme);
+const googleFonts = fontHref(theme);
+
+const siteName = (settings['site.name'] as string) ?? 'Pocket Perks';
+const siteUrl = import.meta.env.PUBLIC_SITE_URL ?? Astro.site?.href.replace(/\/$/, '') ?? '';
+const canonical = `${siteUrl}${canonicalPath ?? Astro.url.pathname}`.replace(/\/$/, '') || siteUrl;
+
+const metaDescription =
+  description ?? (settings['seo.default_description'] as string) ?? '';
+const shareImage =
+  ogImage ?? branding.ogImage ??
+  `${siteUrl}${(settings['seo.og_image_path'] as string) ?? '/og-default.png'}`;
+
+const fullTitle = title.includes(siteName) ? title : `${title} — ${siteName}`;
+
+const organizationSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'Organization',
+  name: siteName,
+  url: siteUrl,
+  logo: `${siteUrl}/logo.png`,
+  description: settings['seo.default_description'],
+};
+
+const breadcrumbSchema =
+  breadcrumbs.length > 1
+    ? {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: breadcrumbs.map((c, i) => ({
+          '@type': 'ListItem',
+          position: i + 1,
+          name: c.name,
+          item: `${siteUrl}${c.href}`,
+        })),
+      }
+    : null;
+
+const allSchema = [organizationSchema, breadcrumbSchema, ...schema].filter(Boolean);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>{fullTitle}</title>
+    <meta name="description" content={metaDescription} />
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex, follow" />}
+
+    <meta property="og:site_name" content={siteName} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={metaDescription} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={shareImage} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={metaDescription} />
+    <meta name="twitter:image" content={shareImage} />
+
+    <meta name="theme-color" content="#093814" />
+    <link rel="icon" href={branding.favicon} type={branding.faviconType} />
+
+    {/*
+      Three weights, not the six the old page loaded. preconnect is present
+      because without it the browser cannot start the font handshake until
+      the CSS has already downloaded and parsed.
+    */}
+    {googleFonts && (
+      <>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="stylesheet" href={googleFonts} />
+      </>
+    )}
+
+    {themeStyles && <style set:html={themeStyles} />}
+
+    {allSchema.map((s) => (
+      <script is:inline type="application/ld+json" set:html={JSON.stringify(s)} />
+    ))}
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <Header nav={nav} settings={settings} blocks={blocks} branding={branding}
+            towns={towns} townContext={townContext} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer nav={nav} settings={settings} branding={branding} />
+    <script is:inline type="module" src="/js/site.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+---
+import Base from '../layouts/Base.astro';
+import { CACHE_STATIC } from '../lib/queries';
+Astro.response.headers.set('Cache-Control', CACHE_STATIC);
+---
+
+<Base title="Page not found" noindex={true} canonicalPath="/404">
+  <div class="wrap section notfound">
+    <h1>That page is not here</h1>
+    <p>
+      The deal may have ended, or the link may be mistyped. Everything that is
+      running right now is one tap away.
+    </p>
+    <div class="row">
+      <a class="btn btn-primary" href="/deals">Browse deals</a>
+      <a class="btn btn-outline" href="/businesses">See businesses</a>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .notfound {
+    text-align: center; max-width: 34rem; margin-inline: auto;
+    padding-block: var(--pp-space-8);
+    display: flex; flex-direction: column; align-items: center; gap: var(--pp-space-3);
+  }
+  .notfound p { color: var(--pp-muted); }
+</style>
