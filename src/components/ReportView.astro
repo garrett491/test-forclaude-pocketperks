@@ -1,0 +1,94 @@
+---
+/**
+ * One business's report. Shown on the admin Reports page and, with the same
+ * numbers, to the business in its portal.
+ *
+ * Three groups, in the order a merchant reads them, with the meaning spelled
+ * out under each number. There is no fourth group for customers or sales.
+ * This website observes taps, not tills, and the first merchant who checks
+ * their own call log against an inflated claim stops believing every other
+ * number on the page.
+ */
+interface Props {
+  row: Record<string, number | string>;
+  audience?: 'admin' | 'business';
+}
+const { row, audience = 'admin' } = Astro.props;
+const n = (v: unknown) => Number(v ?? 0).toLocaleString();
+const yours = audience === 'business';
+
+const groups = [
+  {
+    title: 'Impressions',
+    blurb: yours ? 'Times one of your coupons appeared on someone’s screen.' : 'Times a deal from this business appeared on someone’s screen.',
+    rows: [{ label: 'Deal impressions', value: row.impressions }],
+  },
+  {
+    title: 'Views',
+    blurb: 'Someone chose to open the page and look.',
+    rows: [
+      { label: yours ? 'Views of your page' : 'Business profile views', value: row.profile_views },
+      { label: 'Coupon pages opened', value: row.deal_opens },
+    ],
+  },
+  {
+    title: 'Intent actions',
+    blurb: 'Someone took a step toward visiting or buying.',
+    rows: [
+      { label: 'Tapped Call', value: row.call_clicks },
+      { label: 'Asked for directions', value: row.directions_clicks },
+      { label: 'Clicked through to the website', value: row.website_clicks },
+      { label: 'Copied a coupon code', value: row.code_copies },
+      { label: 'Shared a coupon', value: row.shares },
+    ],
+  },
+];
+---
+
+<div class="headline-stats stat-grid">
+  <div class="stat">
+    <p class="stat-value">{n(row.reached_people)}</p>
+    <p class="stat-label">People reached</p>
+    <p class="stat-note">Approximate. Someone visiting on two days counts twice.</p>
+  </div>
+  <div class="stat">
+    <p class="stat-value">{n(row.intent_actions)}</p>
+    <p class="stat-label">Intent actions</p>
+    <p class="stat-note">Calls, directions, website clicks, code copies, shares</p>
+  </div>
+</div>
+
+{groups.map((group) => (
+  <section class="panel">
+    <h2>{group.title}</h2>
+    <p class="panel-hint">{group.blurb}</p>
+    <table class="admin-table bare">
+      <tbody>
+        {group.rows.map((r) => (
+          <tr>
+            <td>{r.label}</td>
+            <td class="num"><strong>{n(r.value)}</strong></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </section>
+))}
+
+<div class="panel honesty">
+  <h2>What these numbers are not</h2>
+  {!yours && <p class="panel-hint">Worth saying out loud when you hand this over.</p>}
+  <p>
+    A tap on Call is a person choosing to ring {yours ? 'you' : 'the business'}. It is not a
+    sale, and this report does not claim it is. Pocket Perks can see what
+    happens on the website and nothing after that. Bot and crawler traffic
+    is filtered out before any of these figures are counted. Figures are
+    added up overnight, so today’s visits appear tomorrow morning.
+  </p>
+</div>
+
+<style>
+  .headline-stats { margin-block: var(--pp-space-4); }
+  .admin-table.bare th, .admin-table.bare td { padding-inline: 0; }
+  .honesty p { font-size: var(--pp-text-sm); color: var(--pp-muted); max-width: 60ch; }
+</style>

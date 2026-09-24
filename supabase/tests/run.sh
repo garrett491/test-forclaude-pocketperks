@@ -24,6 +24,8 @@ for f in \
   migrations/0008_location_carousel.sql \
   migrations/0009_production_pass.sql \
   migrations/0009_production_pass.sql \
+  migrations/0010_business_portal.sql \
+  migrations/0010_business_portal.sql \
   seed.sql
 do
   psql -h "$PGHOST" -p "$PGPORT" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$DIR/$f"

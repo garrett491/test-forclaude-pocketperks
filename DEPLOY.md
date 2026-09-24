@@ -47,14 +47,14 @@ Supabase dashboard in Step 2, kept alongside the code so it does not get lost.
 Follow `supabase/README.md`. In short:
 
 1. Create a Supabase project (Free tier, region `us-east-1`).
-2. SQL Editor → run the ten files in order:
+2. SQL Editor → run the eleven files in order:
    `0001_foundation` → `0002_tables` → `0003_rls` → `0004_analytics` →
    `0005_storage` → `seed.sql` → `0006_fixes` →
    `0007_gallery_theme_branding` → `0008_location_carousel` →
-   `0009_production_pass`.
+   `0009_production_pass` → `0010_business_portal`.
    Order matters. Each one assumes the previous ran.
 
-   **Already set up?** Run whichever of `0006`–`0009` you have not run yet,
+   **Already set up?** Run whichever of `0006`–`0010` you have not run yet,
    in order. Each is additive and safe to run more than once — nothing is
    dropped and no data is lost. If you are not sure whether you ran one,
    run it again.
@@ -183,6 +183,41 @@ which still works exactly as before. Nothing you have handed out breaks.
 new site is set up. Once the domain points here and you are happy, remove
 the Apps Script deployment: its webhook accepts writes from anyone who reads
 the old page source.
+
+---
+
+## Business logins (optional, any time after launch)
+
+Businesses can sign in at `/portal/login` and propose their own coupons,
+coupon changes (including ending one), business details, opening hours and
+photos. Nothing they send appears until you approve it at
+`/admin/approvals`. Every change records the name they typed, their login
+email, the time, and that their special word was checked.
+
+1. **Run `0010_business_portal.sql`** (Step 2) if you have not.
+2. **Supabase → Authentication → URL Configuration → Redirect URLs**: add
+   `https://<your-site>/**` (for example
+   `https://pocketperkstestsite2.netlify.app/**` and
+   `https://yourpocketperks.com/**`). Password-reset emails only work for
+   addresses listed here.
+3. **Add a login:** Admin → Business logins → their email + their business
+   → Create. You get a one-time link (valid for an hour) to text or email
+   them. They choose a password, then their name and special word.
+4. **Optional email alerts** (you hear when something is waiting; they hear
+   when it is approved or not):
+   - Sign up free at resend.com. Add and verify your domain (Resend shows
+     the DNS records to add where you bought the domain).
+   - Resend → API Keys → Create. In Netlify → Environment variables add
+     `RESEND_API_KEY` (mark it secret), `NOTIFY_FROM_EMAIL` (for example
+     `Pocket Perks <hello@yourpocketperks.com>`, on the verified domain) and,
+     if alerts should go somewhere other than the contact email in Settings,
+     `ADMIN_NOTIFY_EMAIL`. Redeploy.
+   - Until this is set up, nothing is emailed and everything else works:
+     the dashboard shows "Waiting for approval", and businesses see each
+     decision in their portal.
+
+Switching a login off (Business logins → Switch off) takes effect on their
+next click. "Reset special word" makes them choose a new one next time.
 
 ---
 

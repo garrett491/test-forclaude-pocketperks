@@ -2,5 +2,7 @@ User-agent: *
 Allow: /
 Disallow: /admin/
 Disallow: /api/
+Disallow: /portal/
+Disallow: /auth/
 
 Sitemap: https://yourpocketperks.com/sitemap.xml

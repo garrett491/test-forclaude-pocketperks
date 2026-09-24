@@ -56,6 +56,8 @@ Set the database up first — see `supabase/README.md`.
 | `/newsletter` | Result page for the signup form when JavaScript is off. |
 | `/unsubscribe` | One-click unsubscribe from the token in each email (confirm button, POST). |
 | `/search-results` | HTML fragment used by live search. Not linked or indexed. |
+| `/portal/login`, `/portal/*` | Business portal: a business proposes coupons, details, hours and photos, signed with its special word. Nothing goes live until approved. |
+| `/auth/set-password` | Choosing a password, from a reset email or a new business login's link. |
 | `/api/search` | Search suggestions as JSON. |
 | `/404` | |
 | `/sitemap.xml` | Generated from the database, so it never lists an expired deal. |
@@ -83,6 +85,8 @@ no signup route, so a stolen admin session cannot mint more administrators.
 | `/admin/subscribers` | List, search, CSV export shaped for ActiveCampaign |
 | `/admin/leads` | Enquiries from `/for-business`, with status and notes |
 | `/admin/content` | Hero, town chooser, announcement bar, how-it-works, newsletter wording, empty states, navigation |
+| `/admin/approvals` | Changes sent by businesses: who signed, when, before and after. One click approves |
+| `/admin/business-logins` | Create business logins and sign-in links, reset special words, switch logins off |
 | `/admin/design` | Colours, fonts and sizes |
 | `/admin/settings` | Site details, SEO defaults, newsletter destination, carousel, towns, categories |
 
@@ -96,8 +100,10 @@ cannot exceed what the policies allow. Every save checks that a row was
 actually written before saying "Saved".
 
 The service-role key is used only on the server, by the public form
-endpoints (`/api/subscribe`, `/api/merchant-lead`, `/api/track`) and
-`/unsubscribe`. It never reaches the browser.
+endpoints (`/api/subscribe`, `/api/merchant-lead`, `/api/track`),
+`/unsubscribe`, and the two steps on Business logins that need Supabase's
+admin API (creating a login, making a sign-in link). It never reaches the
+browser.
 
 ## Caching
 
@@ -123,7 +129,7 @@ editor.
   and `favicon.svg` are stand-ins traced from the brand colours. Export the
   real ones, then run `npm run images:brand` to regenerate `logo.png`,
   `apple-touch-icon.png` and `og-default.png` (the 1200×630 link preview).
-- **Run migration 0009** in Supabase (see `supabase/README.md`).
+- **Run migrations 0009 and 0010** in Supabase (see `supabase/README.md`).
 - **Have Privacy, Terms and Accessibility reviewed.** They describe what the
   code does, but they are drafts, not legal advice.
 - **Delete the old Google Apps Script deployment** once the domain is moved.

@@ -1,5 +1,6 @@
 ---
 import Admin from '../../layouts/Admin.astro';
+import ReportView from '../../components/ReportView.astro';
 
 export const prerender = false;
 
@@ -26,42 +27,6 @@ const selectedMerchant = (merchants ?? []).find((m: any) => m.id === merchantId)
 
 const n = (v: number | null | undefined) => (v ?? 0).toLocaleString();
 
-/**
- * Three groups, in the order a merchant reads them, with the meaning spelled
- * out under each number.
- *
- * There is no fourth group for customers or sales. This website observes
- * taps, not tills, and the first merchant who checks their own call log
- * against an inflated claim stops believing every other number on the page.
- */
-const groups = selected
-  ? [
-      {
-        title: 'Impressions',
-        blurb: 'Times a deal from this business appeared on someone’s screen.',
-        rows: [{ label: 'Deal impressions', value: selected.impressions }],
-      },
-      {
-        title: 'Views',
-        blurb: 'Someone chose to open the page and look.',
-        rows: [
-          { label: 'Business profile views', value: selected.profile_views },
-          { label: 'Deal pages opened', value: selected.deal_opens },
-        ],
-      },
-      {
-        title: 'Intent actions',
-        blurb: 'Someone took a step toward visiting or buying.',
-        rows: [
-          { label: 'Tapped Call', value: selected.call_clicks },
-          { label: 'Asked for directions', value: selected.directions_clicks },
-          { label: 'Clicked through to the website', value: selected.website_clicks },
-          { label: 'Copied a coupon code', value: selected.code_copies },
-          { label: 'Shared a deal', value: selected.shares },
-        ],
-      },
-    ]
-  : [];
 ---
 
 <Admin title="Reports" profile={profile}>
@@ -109,46 +74,7 @@ const groups = selected
         </div>
       </div>
 
-      <div class="headline-stats stat-grid">
-        <div class="stat">
-          <p class="stat-value">{n(selected.reached_people)}</p>
-          <p class="stat-label">People reached</p>
-          <p class="stat-note">Approximate. Someone visiting on two days counts twice.</p>
-        </div>
-        <div class="stat">
-          <p class="stat-value">{n(selected.intent_actions)}</p>
-          <p class="stat-label">Intent actions</p>
-          <p class="stat-note">Calls, directions, website clicks, code copies, shares</p>
-        </div>
-      </div>
-
-      {groups.map((group) => (
-        <section class="panel">
-          <h2>{group.title}</h2>
-          <p class="panel-hint">{group.blurb}</p>
-          <table class="admin-table bare">
-            <tbody>
-              {group.rows.map((row) => (
-                <tr>
-                  <td>{row.label}</td>
-                  <td class="num"><strong>{n(row.value)}</strong></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      ))}
-
-      <div class="panel honesty">
-        <h2>What these numbers are not</h2>
-        <p class="panel-hint">Worth saying out loud when you hand this over.</p>
-        <p>
-          A tap on Call is a person choosing to ring the business. It is not a
-          sale, and this report does not claim it is. Pocket Perks can see what
-          happens on the website and nothing after that. Bot and crawler traffic
-          is filtered out before any of these figures are counted.
-        </p>
-      </div>
+      <ReportView row={selected} />
     </>
   ) : (
     <section class="panel">
@@ -208,9 +134,6 @@ const groups = selected
   .chip-row { margin-bottom: var(--pp-space-4); }
   .report-head { display: flex; justify-content: space-between; gap: var(--pp-space-4); flex-wrap: wrap; align-items: flex-start; }
   .report-head h2 { margin: 0; }
-  .headline-stats { margin-block: var(--pp-space-4); }
-  .admin-table.bare th, .admin-table.bare td { padding-inline: 0; }
-  .honesty p { font-size: var(--pp-text-sm); color: var(--pp-muted); max-width: 60ch; }
 
   /* Printing is the delivery mechanism: the browser's Save as PDF turns this
      into something you can email a merchant, without adding a PDF library. */

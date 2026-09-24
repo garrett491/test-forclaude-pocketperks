@@ -1,0 +1,102 @@
+---
+import Portal from '../../layouts/Portal.astro';
+import type { PortalMe } from '../../lib/portal';
+
+export const prerender = false;
+
+/**
+ * Name and special word. On a new login this is the first page: nothing can
+ * be sent until a special word is chosen.
+ */
+const { db } = Astro.locals.portal;
+let me: PortalMe = Astro.locals.portal.me;
+const welcome = !me.has_secret;
+
+let error: string | null = null;
+let notice: string | null = null;
+let typedName = me.display_name;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  typedName = String(form.get('display_name') ?? '').trim();
+  const word = String(form.get('new_secret') ?? '');
+  const again = String(form.get('new_secret_again') ?? '');
+  const old = String(form.get('old_secret') ?? '');
+
+  if (word.trim().toLowerCase() !== again.trim().toLowerCase()) {
+    error = 'The two special words are different. Type the same word twice.';
+  } else {
+    const { data, error: rpcError } = await db.rpc('portal_set_secret', {
+      p_display_name: typedName,
+      p_new_secret: word,
+      p_old_secret: me.has_secret ? old : null,
+    });
+    const result = data as { ok: boolean; message?: string } | null;
+    if (rpcError || !result?.ok) {
+      error = result?.message ?? 'That could not be saved. Try again.';
+    } else if (welcome) {
+      return Astro.redirect('/portal', 303);
+    } else {
+      notice = 'Saved. Use your new special word from now on.';
+      const fresh = await db.rpc('portal_me');
+      if (fresh.data) me = fresh.data as PortalMe;
+    }
+  }
+}
+---
+
+<Portal title={welcome ? 'Welcome to your business login' : 'Your account'} me={me}>
+  {error && <p class="form-error" role="alert">{error}</p>}
+  {notice && <p class="form-success" role="status">{notice}</p>}
+
+  <section class="panel">
+    <h2>{welcome ? 'Two things before you start' : 'Your name and special word'}</h2>
+    <p class="panel-hint">
+      Every change you send is signed with your name and your special word, so
+      Pocket Perks knows it really came from you. Choose a word or short phrase
+      only you know, different from your password. Capitals and spaces at the
+      ends don’t matter.
+    </p>
+
+    <form method="post" class="stack account-form">
+      <div class="field">
+        <label for="display_name">Your name</label>
+        <input class="input" id="display_name" name="display_name" required minlength="2" maxlength="80"
+               autocomplete="name" value={typedName} />
+        <p class="hint">As you would sign it, e.g. Pat Owner.</p>
+      </div>
+
+      {me.has_secret && (
+        <div class="field">
+          <label for="old_secret">Your current special word</label>
+          <input class="input" id="old_secret" name="old_secret" type="password" required autocomplete="off" />
+          <p class="hint">Forgotten it? Ask Pocket Perks to reset it, then choose a new one here.</p>
+        </div>
+      )}
+
+      <div class="field">
+        <label for="new_secret">{me.has_secret ? 'New special word' : 'Choose a special word'}</label>
+        <input class="input" id="new_secret" name="new_secret" type="password" required minlength="4" maxlength="64"
+               autocomplete="off" spellcheck="false" autocapitalize="off" />
+        <p class="hint">At least 4 characters.</p>
+      </div>
+      <div class="field">
+        <label for="new_secret_again">Type it again</label>
+        <input class="input" id="new_secret_again" name="new_secret_again" type="password" required
+               autocomplete="off" spellcheck="false" autocapitalize="off" />
+      </div>
+
+      <button class="btn btn-primary" type="submit">{welcome ? 'Save and continue' : 'Save'}</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Sign-in details</h2>
+    <p class="panel-hint">You sign in as <strong>{me.email}</strong>.</p>
+    <a class="btn btn-outline btn-sm" href="/auth/set-password?next=/portal/account">Change your password</a>
+  </section>
+</Portal>
+
+<style>
+  .account-form { max-width: 28rem; }
+</style>

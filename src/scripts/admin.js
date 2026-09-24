@@ -24,6 +24,13 @@ function initConfirmations() {
     });
   });
 
+  // Any other form that should ask first carries its own question.
+  document.querySelectorAll('form[data-confirm]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      if (!confirm(form.dataset.confirm)) event.preventDefault();
+    });
+  });
+
   document.querySelectorAll('form[data-confirm-reset]').forEach((form) => {
     form.addEventListener('submit', (event) => {
       if (!confirm('Put every colour, font and size back to the original Pocket Perks look?')) {
@@ -202,9 +209,11 @@ function initUploads() {
           body.append(`variant_${index}_height`, String(variant.height));
         });
         body.append('alt_text', altInput ? altInput.value.trim() : '');
+        // The business portal uploads to its own endpoint, for one business.
+        if (root.dataset.merchant) body.append('merchant_id', root.dataset.merchant);
 
         say('Uploading…', 'busy');
-        const response = await fetch('/api/admin/upload', { method: 'POST', body });
+        const response = await fetch(root.dataset.endpoint || '/api/admin/upload', { method: 'POST', body });
         const result = await response.json().catch(() => ({}));
 
         if (!response.ok || !result.media) {
@@ -215,7 +224,9 @@ function initUploads() {
 
         idInput.value = result.media.id;
         if (clearButton) clearButton.hidden = false;
-        say('Uploaded. Press Save to put it on the site.', 'ok');
+        say(root.dataset.endpoint
+          ? 'Uploaded. Sign and send the form below to ask for it to go on your page.'
+          : 'Uploaded. Press Save to put it on the site.', 'ok');
       } catch {
         say('That image could not be read. Try a JPEG or PNG.', 'error');
         fileInput.value = '';

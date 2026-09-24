@@ -1,0 +1,282 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import { humanError } from '../../lib/admin';
+import { getAdminDb } from '../../lib/supabase';
+import { portalMissing } from '../../lib/portal';
+import { formatDateTime } from '../../lib/format';
+import { sendEmail, inviteEmail, emailConfigured, siteUrl } from '../../lib/notify';
+
+export const prerender = false;
+
+/**
+ * Who can sign in to the business portal, and for which businesses.
+ *
+ * Creating a login and making sign-in links needs Supabase's admin API, so
+ * those two steps use the service-role key, on the server, after the
+ * middleware has confirmed you are an administrator. Everything else here
+ * uses your own session and the database's own rules.
+ */
+const { db, profile } = Astro.locals;
+let notice: string | null = null;
+let error: string | null = null;
+let link: { email: string; url: string; emailed: boolean } | null = null;
+let typed = { email: '', merchant: '' };
+
+/** A one-time link to choose a password. Nothing is emailed by Supabase. */
+async function signInLink(email: string): Promise<{ url: string; userId: string } | null> {
+  const { data, error: linkError } = await getAdminDb().auth.admin.generateLink({ type: 'recovery', email });
+  if (linkError || !data?.properties?.hashed_token || !data.user) {
+    console.error('[pocket-perks admin] sign-in link failed', linkError?.message ?? '');
+    return null;
+  }
+  return {
+    url: `${siteUrl()}/auth/set-password?token_hash=${encodeURIComponent(data.properties.hashed_token)}&type=recovery&next=/portal`,
+    userId: data.user.id,
+  };
+}
+
+async function deliver(email: string, url: string, merchantNames: string[]) {
+  const emailed = await sendEmail(inviteEmail(email, { merchantNames, link: url }));
+  return { email, url, emailed };
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? '');
+  const userId = String(form.get('user_id') ?? '');
+
+  try {
+    if (intent === 'create') {
+      const email = String(form.get('email') ?? '').trim().toLowerCase();
+      const merchantId = String(form.get('merchant_id') ?? '');
+      typed = { email, merchant: merchantId };
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        error = 'Type the person’s email address.';
+      } else if (!merchantId) {
+        error = 'Pick the business this login is for.';
+      } else {
+        const { data: existing } = await db.from('portal_users').select('user_id').eq('email', email).maybeSingle();
+        const { data: merchant } = await db.from('merchants').select('name').eq('id', merchantId).maybeSingle();
+        if (existing) {
+          // Already a business login: just give it this business too.
+          const added = await db.from('merchant_members')
+            .insert({ user_id: existing.user_id, merchant_id: merchantId, created_by: profile.id }).select('id');
+          error = added.error?.code === '23505' ? 'That login already has this business.' : added.error ? humanError(added.error) : null;
+          if (!error) notice = `${email} can now make changes for ${merchant?.name ?? 'that business'} too. They sign in with the password they already have.`;
+        } else {
+          const created = await getAdminDb().auth.admin.createUser({ email, email_confirm: true });
+          if (created.error) {
+            error = /already|exists|registered/i.test(created.error.message)
+              ? 'That email address already has a different kind of account on Pocket Perks (for example an admin login). Use another address for the business login.'
+              : 'The login could not be created. Try again.';
+          } else {
+            // No read-back: the row includes the special-word column, which
+            // nobody, administrators included, is allowed to read.
+            const userRow = await db.from('portal_users')
+              .insert({ user_id: created.data.user!.id, email, display_name: '', created_by: profile.id });
+            const member = userRow.error ? userRow : await db.from('merchant_members')
+              .insert({ user_id: created.data.user!.id, merchant_id: merchantId, created_by: profile.id }).select('id');
+            if (member.error) {
+              error = humanError(member.error);
+            } else {
+              const made = await signInLink(email);
+              if (made) link = await deliver(email, made.url, [merchant?.name ?? 'your business']);
+              else error = 'The login was created, but the sign-in link could not be made. Press “New sign-in link” below.';
+              typed = { email: '', merchant: '' };
+            }
+          }
+        }
+      }
+    } else if (intent === 'link') {
+      const { data: row } = await db.from('portal_users')
+        .select('email, members:merchant_members ( merchant:merchants ( name ) )').eq('user_id', userId).maybeSingle();
+      if (!row) error = 'That login could not be found.';
+      else {
+        const made = await signInLink(row.email);
+        if (made) link = await deliver(row.email, made.url, ((row as any).members ?? []).map((m: any) => m.merchant?.name).filter(Boolean));
+        else error = 'The sign-in link could not be made. Try again.';
+      }
+    } else if (intent === 'reset_word') {
+      const { data } = await db.rpc('admin_reset_portal_secret', { p_user_id: userId });
+      if ((data as { ok?: boolean } | null)?.ok) notice = 'Special word cleared. They choose a new one the next time they sign in.';
+      else error = 'That did not work. Reload and try again.';
+    } else if (intent === 'toggle') {
+      const active = form.get('active') === 'true';
+      const result = await db.from('portal_users').update({ is_active: active }).eq('user_id', userId);
+      const check = result.error ? null
+        : await db.from('portal_users').select('is_active').eq('user_id', userId).maybeSingle();
+      error = result.error ? humanError(result.error)
+        : check?.data?.is_active !== active ? 'That did not save. Reload and try again.' : null;
+      if (!error) notice = active ? 'Login switched back on.' : 'Login switched off. It cannot see or send anything now.';
+    } else if (intent === 'add_business') {
+      const result = await db.from('merchant_members')
+        .insert({ user_id: userId, merchant_id: String(form.get('merchant_id') ?? ''), created_by: profile.id }).select('id');
+      error = result.error?.code === '23505' ? 'That login already has this business.' : result.error ? humanError(result.error) : null;
+      if (!error) notice = 'Business added to that login.';
+    } else if (intent === 'remove_business') {
+      const result = await db.from('merchant_members').delete().eq('id', String(form.get('member_id') ?? '')).select('id');
+      error = result.error ? humanError(result.error) : !result.data?.length ? 'Already removed.' : null;
+      if (!error) notice = 'Business removed from that login.';
+    }
+  } catch (e) {
+    console.error('[pocket-perks admin] business logins', e instanceof Error ? e.message : e);
+    error = 'The server is missing its Supabase service key (SUPABASE_SERVICE_ROLE_KEY), so logins cannot be created. See DEPLOY.md.';
+  }
+}
+
+const [usersRes, merchantsRes] = await Promise.all([
+  db.from('portal_users')
+    .select('user_id, display_name, email, secret_set_at, locked_until, is_active, created_at, members:merchant_members ( id, merchant:merchants ( id, name ) )')
+    .order('created_at', { ascending: false }),
+  db.from('merchants').select('id, name').neq('status', 'archived').order('name'),
+]);
+const missing = portalMissing(usersRes.error);
+const users = (usersRes.data ?? []) as any[];
+const merchants = (merchantsRes.data ?? []) as { id: string; name: string }[];
+---
+
+<Admin title="Business logins" profile={profile}>
+  <a slot="actions" class="btn btn-outline btn-sm" href="/admin/approvals">Approvals</a>
+
+  {notice && <p class="form-success" role="status">{notice}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {link && (
+    <section class="panel link-panel" aria-labelledby="link-title">
+      <h2 id="link-title">Sign-in link for {link.email}</h2>
+      <p class="panel-hint">
+        {link.emailed
+          ? 'Emailed to them. You can also copy it and text it to them.'
+          : emailConfigured()
+            ? 'The email did not send. Copy the link and send it to them yourself.'
+            : 'Copy this link and send it to them (text or email). Email sending is not set up yet.'}
+        {' '}It works once and expires after an hour. Make a new one any time.
+      </p>
+      <label class="sr-only" for="signin-link">Sign-in link</label>
+      <textarea class="input link-box" id="signin-link" rows="3" readonly>{link.url}</textarea>
+    </section>
+  )}
+
+  {missing ? (
+    <section class="panel">
+      <h2>Business logins are not switched on yet</h2>
+      <p class="panel-hint">Run <code>supabase/migrations/0010_business_portal.sql</code> in the Supabase SQL Editor, then reload this page.</p>
+    </section>
+  ) : (
+    <>
+      <form method="post" class="panel stack add-login">
+        <h2>Add a business login</h2>
+        <p class="panel-hint">
+          One login per person, so every change shows who made it. They choose
+          their own password and special word; you never see either.
+        </p>
+        <input type="hidden" name="intent" value="create" />
+        <div class="form-grid cols-2">
+          <div class="field">
+            <label for="email">Their email address</label>
+            <input class="input" id="email" name="email" type="email" required autocomplete="off" value={typed.email} />
+          </div>
+          <div class="field">
+            <label for="merchant_id">Business</label>
+            <select class="input" id="merchant_id" name="merchant_id" required>
+              <option value="">Choose…</option>
+              {merchants.map((m) => <option value={m.id} selected={typed.merchant === m.id}>{m.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-primary" type="submit">Create login and sign-in link</button>
+      </form>
+
+      <section class="panel" aria-labelledby="logins-title">
+        <h2 id="logins-title">Logins ({users.length})</h2>
+        {users.length === 0 ? (
+          <p class="empty-row">No business logins yet.</p>
+        ) : (
+          <ul class="list-plain logins">
+            {users.map((u) => {
+              const locked = u.locked_until && Date.parse(u.locked_until) > Date.now();
+              return (
+                <li class="login">
+                  <div class="login-head">
+                    <div>
+                      <strong>{u.display_name || 'Name not set yet'}</strong>
+                      <span class="muted"> · {u.email}</span>
+                    </div>
+                    <div class="pills">
+                      <span class={`pill ${u.is_active ? 'pill-active' : 'pill-archived'}`}>{u.is_active ? 'On' : 'Switched off'}</span>
+                      <span class={`pill ${u.secret_set_at ? 'pill-active' : 'pill-draft'}`}>{u.secret_set_at ? 'Special word set' : 'No special word yet'}</span>
+                      {locked && <span class="pill pill-paused">Locked for 15 minutes (wrong words)</span>}
+                    </div>
+                  </div>
+
+                  <ul class="list-plain biz">
+                    {(u.members ?? []).map((m: any) => (
+                      <li>
+                        {m.merchant?.name ?? 'Unknown business'}
+                        <form method="post" class="inline" data-confirm={`Remove ${m.merchant?.name ?? 'this business'} from ${u.email}?`}>
+                          <input type="hidden" name="intent" value="remove_business" />
+                          <input type="hidden" name="member_id" value={m.id} />
+                          <button class="btn btn-ghost btn-sm" type="submit">Remove</button>
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <div class="actions">
+                    <form method="post" class="inline">
+                      <input type="hidden" name="intent" value="link" />
+                      <input type="hidden" name="user_id" value={u.user_id} />
+                      <button class="btn btn-outline btn-sm" type="submit">New sign-in link</button>
+                    </form>
+                    <form method="post" class="inline" data-confirm="Clear their special word? They will choose a new one next time they sign in.">
+                      <input type="hidden" name="intent" value="reset_word" />
+                      <input type="hidden" name="user_id" value={u.user_id} />
+                      <button class="btn btn-outline btn-sm" type="submit">Reset special word</button>
+                    </form>
+                    <form method="post" class="inline" data-confirm={u.is_active ? `Switch off ${u.email}? They will not be able to see or send anything.` : undefined}>
+                      <input type="hidden" name="intent" value="toggle" />
+                      <input type="hidden" name="user_id" value={u.user_id} />
+                      <input type="hidden" name="active" value={u.is_active ? 'false' : 'true'} />
+                      <button class={`btn btn-sm ${u.is_active ? 'btn-ghost danger' : 'btn-outline'}`} type="submit">
+                        {u.is_active ? 'Switch off' : 'Switch back on'}
+                      </button>
+                    </form>
+                    <form method="post" class="inline add-biz">
+                      <input type="hidden" name="intent" value="add_business" />
+                      <input type="hidden" name="user_id" value={u.user_id} />
+                      <label class="sr-only" for={`add-${u.user_id}`}>Add a business to {u.email}</label>
+                      <select class="input input-sm" id={`add-${u.user_id}`} name="merchant_id" required>
+                        <option value="">Add a business…</option>
+                        {merchants.map((m) => <option value={m.id}>{m.name}</option>)}
+                      </select>
+                      <button class="btn btn-ghost btn-sm" type="submit">Add</button>
+                    </form>
+                  </div>
+                  <p class="hint">Added {formatDateTime(u.created_at)}</p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+    </>
+  )}
+</Admin>
+
+<style>
+  .add-login { max-width: 44rem; }
+  .link-panel { border-color: var(--pp-green); }
+  .link-box { width: 100%; border-radius: var(--pp-radius-inset); font-family: ui-monospace, monospace; font-size: var(--pp-text-sm); word-break: break-all; }
+  .logins { display: flex; flex-direction: column; }
+  .login { display: flex; flex-direction: column; gap: var(--pp-space-2); padding-block: var(--pp-space-4); border-top: 1px solid var(--pp-line); min-width: 0; }
+  .login:first-child { border-top: 0; padding-top: 0; }
+  .login-head { display: flex; justify-content: space-between; gap: var(--pp-space-2); flex-wrap: wrap; overflow-wrap: anywhere; }
+  .muted { color: var(--pp-muted); }
+  .pills { display: flex; gap: var(--pp-space-1); flex-wrap: wrap; }
+  .biz li { display: flex; align-items: center; gap: var(--pp-space-2); font-size: var(--pp-text-sm); }
+  .actions { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; align-items: center; }
+  .inline { margin: 0; display: inline-flex; gap: var(--pp-space-1); align-items: center; }
+  .input-sm { min-height: 36px; padding-block: 0; font-size: var(--pp-text-sm); max-width: 14rem; }
+  .danger { color: var(--pp-danger); }
+  .login .hint { margin: 0; font-size: var(--pp-text-xs); color: var(--pp-muted); }
+</style>

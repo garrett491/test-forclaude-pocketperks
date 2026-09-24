@@ -437,6 +437,19 @@ function pickColumns(rows, selectText) {
   return rows.map((row) => Object.fromEntries(nodes.map((n) => [n.alias, row[n.column]])));
 }
 
+/**
+ * What a write hands back. Like PostgREST: nothing unless the caller asked
+ * for a representation, and then only the columns in ?select=. Reading back
+ * a whole row would need SELECT on every column, which a column-restricted
+ * table (portal_users) deliberately does not grant.
+ */
+function returning(req, url, table, alias) {
+  if (!/return=representation/.test(prefer(req))) return `'{}'::jsonb`;
+  const nodes = parseSelect(url.searchParams.get('select'));
+  if (!nodes.length || nodes.some((n) => n.kind !== 'col' || n.column === '*')) return `to_jsonb(${alias}.*)`;
+  return rowJson(table, alias, nodes, '', new Map(), []);
+}
+
 async function restWrite(req, url, table, caller, body) {
   if (!schema.tables.has(table)) throw new ApiError(404, '42P01', `relation "public.${table}" does not exist`);
   aliasCounter = 0;
@@ -459,7 +472,7 @@ async function restWrite(req, url, table, caller, body) {
       const target = (onConflict || 'id').split(',').map((c) => `"${c}"`).join(', ');
       sql += ` on conflict (${target}) do update set ${columns.map((c) => `"${c}" = excluded."${c}"`).join(', ')}`;
     }
-    sql += ' returning to_jsonb(ins.*) as row';
+    sql += ` returning ${returning(req, url, table, 'ins')} as row`;
     return asCaller(caller, async (client) => (await client.query(sql, params)).rows.map((r) => r.row));
   }
 
@@ -475,12 +488,12 @@ async function restWrite(req, url, table, caller, body) {
     const n = params.length;
     const sql = `update public."${table}" ${alias} set ${columns.map((c) => `"${c}" = src."${c}"`).join(', ')}
       from jsonb_populate_record(null::public."${table}", $${n}::jsonb) src${where}
-      returning to_jsonb(${alias}.*) as row`;
+      returning ${returning(req, url, table, alias)} as row`;
     return asCaller(caller, async (client) => (await client.query(sql, params)).rows.map((r) => r.row));
   }
 
   if (req.method === 'DELETE') {
-    const sql = `delete from public."${table}" ${alias}${where} returning to_jsonb(${alias}.*) as row`;
+    const sql = `delete from public."${table}" ${alias}${where} returning ${returning(req, url, table, alias)} as row`;
     return asCaller(caller, async (client) => (await client.query(sql, params)).rows.map((r) => r.row));
   }
   throw new ApiError(405, 'PGRST000', 'method not allowed');
@@ -559,10 +572,62 @@ async function authRoute(req, url, body) {
     if (!rows[0]) return [404, { code: 404, msg: 'User not found' }];
     return [200, userJson(rows[0])];
   }
+  if (path === '/user' && req.method === 'PUT') {
+    const claims = verifyJwt(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+    if (!claims?.sub) return [401, { code: 401, msg: 'invalid JWT', error_code: 'bad_jwt' }];
+    if (body?.password !== undefined) {
+      if (String(body.password).length < 6) return [422, { code: 422, error_code: 'weak_password', msg: 'Password should be at least 6 characters.' }];
+      await pool.query('update auth.users set test_password = $2 where id = $1', [claims.sub, String(body.password)]);
+    }
+    const { rows } = await pool.query('select id, email from auth.users where id = $1', [claims.sub]);
+    return [200, userJson(rows[0])];
+  }
+  if (path === '/verify' && req.method === 'POST') {
+    const entry = linkTokens.get(body?.token_hash ?? '');
+    if (!entry || entry.expires < Date.now()) {
+      return [403, { code: 403, error_code: 'otp_expired', msg: 'Email link is invalid or has expired' }];
+    }
+    linkTokens.delete(body.token_hash);
+    return [200, session({ id: entry.userId, email: entry.email })];
+  }
+  // Admin API: service role only, exactly as on Supabase.
+  if (path.startsWith('/admin/')) {
+    const key = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (key !== SERVICE_KEY) return [401, { code: 401, msg: 'This endpoint requires a valid service role key' }];
+    if (path === '/admin/users' && req.method === 'POST') {
+      const email = String(body?.email ?? '').toLowerCase();
+      const { rows: found } = await pool.query('select id from auth.users where lower(email) = $1', [email]);
+      if (found[0]) return [422, { code: 422, error_code: 'email_exists', msg: 'A user with this email address has already been registered' }];
+      const { rows } = await pool.query(
+        'insert into auth.users (email, test_password) values ($1, $2) returning id, email', [email, body?.password ?? null]);
+      return [200, userJson(rows[0])];
+    }
+    if (path === '/admin/generate_link' && req.method === 'POST') {
+      const email = String(body?.email ?? '').toLowerCase();
+      const { rows } = await pool.query('select id, email from auth.users where lower(email) = $1', [email]);
+      if (!rows[0]) return [404, { code: 404, error_code: 'user_not_found', msg: 'User with this email not found' }];
+      const hashed = randomUUID().replace(/-/g, '');
+      linkTokens.set(hashed, { userId: rows[0].id, email: rows[0].email, expires: Date.now() + 3_600_000 });
+      return [200, {
+        ...userJson(rows[0]),
+        action_link: `http://127.0.0.1:${PORT}/auth/v1/verify?token=${hashed}&type=${body?.type}`,
+        email_otp: '123456', hashed_token: hashed, redirect_to: body?.redirect_to ?? '', verification_type: body?.type,
+      }];
+    }
+  }
   if (path === '/logout') return [204, null];
   if (path === '/recover') return [200, {}];
   return [404, { msg: 'not found' }];
 }
+
+/** One-time sign-in links made through the admin API. */
+const linkTokens = new Map();
+
+/* ------------------------------------------------------------------ */
+/* Email catcher: stands in for Resend when RESEND_API_URL points here */
+/* ------------------------------------------------------------------ */
+
+const sentEmails = [];
 
 /* ------------------------------------------------------------------ */
 /* Storage                                                             */
@@ -641,6 +706,17 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/__control/outage') {
     outage = url.searchParams.get('on') === '1';
     return send(res, 200, { outage });
+  }
+  if (url.pathname === '/__email' && req.method === 'POST') {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    sentEmails.push(JSON.parse(Buffer.concat(chunks).toString() || '{}'));
+    return send(res, 200, { id: randomUUID() });
+  }
+  if (url.pathname === '/__control/emails') {
+    const list = sentEmails.slice();
+    if (url.searchParams.get('clear')) sentEmails.length = 0;
+    return send(res, 200, list);
   }
   if (url.pathname === '/__control/stats') {
     const body = { count: requestCount, paths: requestLog };

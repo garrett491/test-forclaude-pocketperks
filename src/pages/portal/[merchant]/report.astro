@@ -1,0 +1,54 @@
+---
+import Portal from '../../../layouts/Portal.astro';
+import ReportView from '../../../components/ReportView.astro';
+
+export const prerender = false;
+
+/** The business's own figures: the same numbers the admin Reports page shows. */
+const portal = Astro.locals.portal;
+const merchant = portal.me.merchants.find((m) => m.slug === Astro.params.merchant);
+if (!merchant) return Astro.redirect('/portal', 302);
+
+const params = Astro.url.searchParams;
+const presets: Record<string, number> = { '7': 7, '30': 30, '90': 90 };
+const rangeKey = presets[params.get('range') ?? ''] ? params.get('range')! : '30';
+const days = presets[rangeKey];
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const from = iso(new Date(Date.now() - (days - 1) * 86_400_000));
+const to = iso(new Date());
+
+const { data, error } = await portal.db.rpc('portal_report', { p_merchant_id: merchant.id, p_from: from, p_to: to });
+const row = (data ?? null) as Record<string, number | string> | null;
+const long = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+---
+
+<Portal title="Your report" me={portal.me} merchant={merchant}>
+  <button slot="actions" class="btn btn-outline btn-sm" type="button" data-print>Print or save as PDF</button>
+
+  <div class="chip-row" role="group" aria-label="Date range">
+    {Object.keys(presets).map((key) => (
+      <a class="chip" href={`/portal/${merchant.slug}/report?range=${key}`} aria-current={rangeKey === key ? 'true' : undefined}>
+        Last {key} days
+      </a>
+    ))}
+  </div>
+  <p class="panel-hint">{long(from)} to {long(to)}</p>
+
+  {error ? (
+    <p class="form-error" role="alert">The report could not be loaded. Try again in a moment.</p>
+  ) : row ? (
+    <ReportView row={row} audience="business" />
+  ) : (
+    <p class="empty-row">No activity recorded yet. Figures are added up overnight, so today’s visits appear tomorrow morning.</p>
+  )}
+</Portal>
+
+<style>
+  .chip-row { margin-bottom: var(--pp-space-2); }
+  @media print {
+    :global(.admin-topbar), :global(.admin-nav), .chip-row, :global([data-print]) { display: none !important; }
+    :global(.admin-main) { padding: 0; }
+    :global(.panel) { break-inside: avoid; box-shadow: none; border-color: #ccc; }
+    :global(.admin-body) { background: #fff; }
+  }
+</style>

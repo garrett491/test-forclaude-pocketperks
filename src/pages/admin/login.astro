@@ -35,7 +35,9 @@ if (Astro.request.method === 'POST') {
     {
       const db = getAuthClient(Astro.cookies, Astro.request);
       await db.auth.resetPasswordForEmail(email, {
-        redirectTo: `${import.meta.env.PUBLIC_SITE_URL}/admin/login`,
+        // The link lands on a page that actually lets you choose a new
+        // password. It used to land back here, where it did nothing.
+        redirectTo: `${import.meta.env.PUBLIC_SITE_URL}/auth/set-password?next=/admin`,
       });
     }
     notice = 'If that address has an account, a reset link is on its way.';

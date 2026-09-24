@@ -36,12 +36,22 @@ SQL Editor → paste each file → Run, in this order:
 | 8 | `migrations/0007_gallery_theme_branding.sql` | Photo gallery, theme settings, branding slots, Malvern |
 | 9 | `migrations/0008_location_carousel.sql` | Carousel speed/autoplay settings, area name, empty states |
 | 10 | `migrations/0009_production_pass.sql` | Carousel switch per business, short deal limits, image copies for phones, signup consent records, Terms/Accessibility links, town-chooser wording, expired deals no longer count against the plan |
+| 11 | `migrations/0010_business_portal.sql` | Business logins: signed change requests, approval, special words, per-business photo uploads, the portal's report. Also closes the analytics clean-up functions to the public |
 
-**Already running an older version?** Run any of 0006–0009 you have not run
+**Already running an older version?** Run any of 0006–0010 you have not run
 yet, in order. Every one is additive and safe to run more than once —
 nothing is dropped and no data is lost. The website keeps working before
-0009 is applied (with the new features switched off), so deploying the code
-first is safe; run 0009 straight after.
+0009 and 0010 are applied (with the new features switched off), so
+deploying the code first is safe; run them straight after.
+
+**How business logins stay contained (0010).** A business login has no row
+in `profiles`, so every existing policy treats it like the public. It can
+only call the portal functions, and each one checks that the caller belongs
+to that particular business. Proposed changes land in `change_requests` and
+touch nothing live until `review_change` is called by an administrator. The
+special word is stored as a bcrypt hash that no role can read; five wrong
+tries lock that login for 15 minutes. Section 10 of the database tests
+proves each of these.
 
 Order matters: `is_admin()` cannot be created before the `profiles` table
 exists, and `0005` cannot create its policies before `is_admin()` exists.

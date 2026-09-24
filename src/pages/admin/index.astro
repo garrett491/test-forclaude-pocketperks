@@ -10,7 +10,7 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 const from = iso(new Date(today.getTime() - 29 * 86_400_000));
 const to = iso(today);
 
-const [summaryRes, merchantsRes, dealsRes, subsRes, leadsRes, expiringRes] = await Promise.all([
+const [summaryRes, merchantsRes, dealsRes, subsRes, leadsRes, expiringRes, approvalsRes] = await Promise.all([
   db.rpc('merchant_report_summary', { p_from: from, p_to: to }),
   db.from('merchants').select('id, status', { count: 'exact' }),
   db.from('deals').select('id, status', { count: 'exact' }),
@@ -22,7 +22,10 @@ const [summaryRes, merchantsRes, dealsRes, subsRes, leadsRes, expiringRes] = awa
     .not('ends_at', 'is', null)
     .lte('ends_at', new Date(Date.now() + 7 * 86_400_000).toISOString())
     .order('ends_at'),
+  // Before migration 0010 this table does not exist; the error is ignored.
+  db.from('change_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
 ]);
+const waiting = approvalsRes.error ? 0 : approvalsRes.count ?? 0;
 
 const summary = (summaryRes.data ?? []) as any[];
 const merchants = merchantsRes.data ?? [];
@@ -64,6 +67,16 @@ const dayLabel = (iso: string | null) => {
     <a class="btn btn-outline btn-sm" href="/admin/merchants/new">Add business</a>
     <a class="btn btn-primary btn-sm" href="/admin/deals/new">Add deal</a>
   </div>
+
+  {waiting > 0 && (
+    <section class="panel approvals-callout" aria-labelledby="approvals-title">
+      <div>
+        <h2 id="approvals-title">Waiting for approval ({waiting})</h2>
+        <p class="panel-hint">Changes sent by businesses. Nothing goes on the site until you approve it.</p>
+      </div>
+      <a class="btn btn-primary" href="/admin/approvals">Review {waiting === 1 ? 'it' : 'them'}</a>
+    </section>
+  )}
 
   <section aria-labelledby="activity-title">
     <h2 id="activity-title" class="sr-only">Activity in the last 30 days</h2>
@@ -184,6 +197,8 @@ const dayLabel = (iso: string | null) => {
 </Admin>
 
 <style>
+  .approvals-callout { display: flex; justify-content: space-between; align-items: center; gap: var(--pp-space-3); flex-wrap: wrap; border-color: var(--pp-green); margin-bottom: var(--pp-space-4); }
+  .approvals-callout .panel-hint { margin: 0; }
   .range-note { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: var(--pp-space-2) 0 var(--pp-space-5); }
   .attention { display: flex; flex-direction: column; gap: var(--pp-space-2); }
   .attention li {

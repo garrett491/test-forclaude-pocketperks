@@ -1,0 +1,109 @@
+---
+import Portal from '../../../layouts/Portal.astro';
+import SignOff from '../../../components/SignOff.astro';
+import ChangeView from '../../../components/ChangeView.astro';
+import ImageUpload from '../../../components/ImageUpload.astro';
+import MediaFrame from '../../../components/MediaFrame.astro';
+import { loadBusiness, pendingFor, mediaForRequests } from '../../../lib/portal';
+import { submitChange } from '../../../lib/portal-submit';
+
+export const prerender = false;
+
+/** The photo gallery on the business's page. Add or remove, each signed. */
+const portal = Astro.locals.portal;
+const loaded = await loadBusiness(portal, Astro.params.merchant);
+if (!loaded) return Astro.redirect('/portal', 302);
+const { merchant, snapshot } = loaded;
+
+let signedName = portal.me.display_name;
+let error: string | null = null;
+let caption = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  signedName = String(form.get('signed_name') ?? signedName);
+  const intent = String(form.get('intent') ?? '');
+  if (intent === 'add') {
+    const mediaId = String(form.get('media_id') ?? '');
+    caption = String(form.get('caption') ?? '').trim();
+    if (!mediaId) {
+      error = 'Choose a photo first, and wait for it to finish uploading.';
+    } else {
+      const result = await submitChange(Astro.locals, merchant, 'gallery_add', null,
+        { media_id: mediaId, caption }, form);
+      if (result.ok) return Astro.redirect(`/portal/${merchant.slug}?sent=1`, 303);
+      error = result.message;
+    }
+  } else if (intent === 'remove') {
+    const result = await submitChange(Astro.locals, merchant, 'gallery_remove', null,
+      { gallery_id: String(form.get('gallery_id') ?? '') }, form);
+    if (result.ok) return Astro.redirect(`/portal/${merchant.slug}?sent=1`, 303);
+    error = result.message;
+  }
+}
+
+const waiting = pendingFor(snapshot, (r) => r.kind === 'gallery_add' || r.kind === 'gallery_remove');
+const media = await mediaForRequests(portal.db, waiting);
+const full = snapshot.gallery.length >= snapshot.gallery_limit;
+---
+
+<Portal title="Photos" me={portal.me} merchant={merchant}>
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {waiting.length > 0 && (
+    <section class="panel">
+      <h2>Already waiting for approval</h2>
+      {waiting.map((r) => <ChangeView request={r} media={media} />)}
+    </section>
+  )}
+
+  <section class="panel">
+    <h2>On your page now ({snapshot.gallery.length} of {snapshot.gallery_limit})</h2>
+    <p class="panel-hint">Your {snapshot.merchant.tier} plan includes {snapshot.gallery_limit} gallery {snapshot.gallery_limit === 1 ? 'photo' : 'photos'}. Your logo and cover photo are on the Business details page.</p>
+    {snapshot.gallery.length === 0 ? (
+      <p class="empty-row">No gallery photos yet.</p>
+    ) : (
+      <ul class="list-plain gallery-list">
+        {snapshot.gallery.map((g, i) => (
+          <li class="gallery-item">
+            <div class="thumb"><MediaFrame asset={g.media} mode="box" ratio={1.5} kind="photo" alt={g.media.alt_text} name={merchant.name} width={320} /></div>
+            {g.caption && <p class="hint">{g.caption}</p>}
+            <details>
+              <summary>Remove this photo</summary>
+              <form method="post">
+                <input type="hidden" name="intent" value="remove" />
+                <input type="hidden" name="gallery_id" value={g.id} />
+                <SignOff name={signedName} idPrefix={`remove-${i}`} action="Send: remove it" danger />
+              </form>
+            </details>
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
+
+  <form method="post" class="panel stack add-form">
+    <h2>Add a photo</h2>
+    {full && (
+      <p class="panel-hint">Your gallery is full. Remove one first, or ask Pocket Perks about a bigger plan.</p>
+    )}
+    <input type="hidden" name="intent" value="add" />
+    <ImageUpload name="media_id" label="Photo" aspect="wide" maxEdge={1600}
+                 endpoint="/api/portal/upload" merchantId={merchant.id}
+                 hint="Any shape; photos are never cropped. Only upload photos you own or have permission to use." />
+    <div class="field">
+      <label for="caption">Caption <span class="opt">(optional)</span></label>
+      <input class="input" id="caption" name="caption" maxlength="160" value={caption} />
+    </div>
+    <SignOff name={signedName} idPrefix="add" />
+  </form>
+</Portal>
+
+<style>
+  .gallery-list { display: grid; gap: var(--pp-space-4); grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); }
+  .gallery-item { display: flex; flex-direction: column; gap: var(--pp-space-2); min-width: 0; }
+  .thumb { border: 1px solid var(--pp-line); border-radius: var(--pp-radius-inset); overflow: hidden; }
+  .gallery-item summary { cursor: pointer; font-size: var(--pp-text-sm); font-weight: 600; min-height: var(--pp-tap-min); display: flex; align-items: center; }
+  .add-form { max-width: 40rem; }
+  .opt { font-weight: 400; color: var(--pp-muted); }
+</style>

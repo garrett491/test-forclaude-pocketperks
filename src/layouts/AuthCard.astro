@@ -1,0 +1,53 @@
+---
+import '../styles/global.css';
+import '../styles/admin.css';
+
+/** The small centred card used by every sign-in and password page. */
+interface Props {
+  title: string;
+  /** Shown under the logo, e.g. "Business login". */
+  eyebrow?: string;
+}
+const { title, eyebrow } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{title} — Pocket Perks</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body class="login-body">
+    <main class="login-card">
+      <a href="/" class="login-logo"><img src="/logo.svg" alt="Pocket Perks home" width="180" height="41" /></a>
+      {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+      <h1>{title}</h1>
+      <slot />
+    </main>
+  </body>
+</html>
+
+<style>
+  .login-body {
+    min-height: 100vh; display: grid; place-items: center;
+    background: var(--pp-deep); padding: var(--pp-space-4);
+  }
+  .login-card {
+    width: min(26rem, 100%);
+    background: var(--pp-surface);
+    border-radius: var(--pp-radius-card);
+    border-left: var(--pp-stitch);
+    padding: var(--pp-space-6);
+    box-shadow: var(--pp-shadow-lift);
+    display: flex; flex-direction: column; gap: var(--pp-space-4);
+  }
+  .login-logo { align-self: flex-start; }
+  .login-card img { height: 36px; width: auto; display: block; }
+  .login-card h1 { font-size: var(--pp-text-xl); margin: 0; }
+  .eyebrow { margin: 0; font-size: var(--pp-text-xs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--pp-green); }
+  .login-card :global(.note) { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: 0; }
+  .login-card :global(.reset-btn) { align-self: center; }
+</style>

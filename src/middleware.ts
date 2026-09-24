@@ -1,6 +1,7 @@
 import { defineMiddleware } from 'astro:middleware';
 import { requireAdmin } from './lib/admin';
 import { purgePublicCache } from './lib/purge';
+import { getPortalSession } from './lib/portal';
 
 /**
  * Every /admin route is gated here, before any page code runs.
@@ -23,6 +24,45 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const isAdminWrite = context.request.method === 'POST' &&
     (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) &&
     pathname !== '/admin/login' && pathname !== '/admin/logout';
+
+  // Password pages are personal: never cached, never indexed.
+  if (pathname.startsWith('/auth/')) {
+    const response = await next();
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    return response;
+  }
+
+  // The business portal. Same idea as /admin below: every page is closed
+  // unless a business login is signed in. The database decides what that
+  // login may see and propose; this only picks the page.
+  if (pathname === '/portal' || pathname.startsWith('/portal/') || pathname.startsWith('/api/portal/')) {
+    const open = pathname === '/portal/login' || pathname === '/portal/logout';
+    let response: Response;
+    if (open) {
+      response = await next();
+    } else {
+      const { session, missing } = await getPortalSession(context.cookies, context.request);
+      if (!session) {
+        if (pathname.startsWith('/api/')) {
+          return new Response(JSON.stringify({ message: 'Sign in again, then retry.' }), {
+            status: 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          });
+        }
+        const back = encodeURIComponent(pathname + context.url.search);
+        return context.redirect(`/portal/login?next=${back}${missing ? '&unavailable=1' : ''}`, 302);
+      }
+      context.locals.portal = session;
+      // Nothing can be sent until the person has chosen a special word.
+      if (!session.me.has_secret && pathname !== '/portal/account' && !pathname.startsWith('/api/')) {
+        return context.redirect('/portal/account?welcome=1', 302);
+      }
+      response = await next();
+    }
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    return response;
+  }
 
   if (!pathname.startsWith('/admin')) {
     const response = await next();

@@ -1,0 +1,50 @@
+---
+/**
+ * The signature on every change a business sends: their name, as they
+ * would sign it, and their special word. The time and the login's email are
+ * recorded by the database, not typed.
+ */
+interface Props {
+  name: string;
+  /** Button text, e.g. "Send for approval". */
+  action?: string;
+  /** Distinguishes several forms on one page. */
+  idPrefix?: string;
+  danger?: boolean;
+}
+const { name, action = 'Send for approval', idPrefix = 'sign', danger = false } = Astro.props;
+---
+
+<fieldset class="signoff">
+  <legend>Sign this change</legend>
+  <div class="signoff-fields">
+    <div class="field">
+      <label for={`${idPrefix}-name`}>Your name</label>
+      <input class="input" id={`${idPrefix}-name`} name="signed_name" required minlength="2" maxlength="80"
+             autocomplete="name" value={name} />
+    </div>
+    <div class="field">
+      <label for={`${idPrefix}-secret`}>Your special word</label>
+      <input class="input" id={`${idPrefix}-secret`} name="secret" type="password" required
+             autocomplete="off" spellcheck="false" autocapitalize="off" />
+    </div>
+  </div>
+  <p class="hint">
+    Pocket Perks checks every change before it goes on the site. Your name, your
+    login and the time are recorded with it.
+  </p>
+  <button class={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} type="submit">{action}</button>
+</fieldset>
+
+<style>
+  .signoff {
+    border: 1px solid var(--pp-line-strong); border-radius: var(--pp-radius-inset);
+    padding: var(--pp-space-4); margin: var(--pp-space-4) 0 0; background: var(--pp-paper);
+    display: flex; flex-direction: column; gap: var(--pp-space-3); align-items: flex-start;
+    min-width: 0;
+  }
+  .signoff legend { font-weight: 700; padding-inline: var(--pp-space-1); }
+  .signoff-fields { display: grid; gap: var(--pp-space-3); grid-template-columns: minmax(0, 1fr); width: 100%; max-width: 36rem; }
+  @media (min-width: 40rem) { .signoff-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .signoff .hint { margin: 0; font-size: var(--pp-text-sm); color: var(--pp-muted); max-width: 36rem; }
+</style>

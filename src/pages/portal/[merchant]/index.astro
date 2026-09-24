@@ -1,0 +1,119 @@
+---
+import Portal from '../../../layouts/Portal.astro';
+import ChangeView from '../../../components/ChangeView.astro';
+import { loadBusiness, mediaForRequests } from '../../../lib/portal';
+import { formatDateTime } from '../../../lib/format';
+
+export const prerender = false;
+
+const portal = Astro.locals.portal;
+let notice: string | null = Astro.url.searchParams.get('sent') ? 'Sent for approval. It will appear on the site once Pocket Perks approves it.' : null;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  if (form.get('intent') === 'withdraw') {
+    const { data } = await portal.db.rpc('withdraw_change', { p_id: String(form.get('id') ?? '') });
+    const result = data as { ok: boolean; message?: string } | null;
+    if (result?.ok) notice = 'Withdrawn. Nothing about it will change on the site.';
+    else error = result?.message ?? 'That could not be withdrawn.';
+  }
+}
+
+const loaded = await loadBusiness(portal, Astro.params.merchant);
+if (!loaded) return Astro.redirect('/portal', 302);
+const { merchant, snapshot } = loaded;
+
+const now = Date.now();
+function dealState(d: Record<string, any>): { label: string; cls: string; live: boolean } {
+  if (d.status === 'paused') return { label: 'Hidden (ended)', cls: 'pill-paused', live: false };
+  if (d.status !== 'active') return { label: 'Not on the site', cls: 'pill-draft', live: false };
+  if (d.ends_at && Date.parse(d.ends_at) <= now) return { label: 'Ended', cls: 'pill-draft', live: false };
+  if (d.starts_at && Date.parse(d.starts_at) > now) return { label: 'Scheduled', cls: 'pill-paused', live: true };
+  return { label: 'Live', cls: 'pill-active', live: true };
+}
+const deals = snapshot.deals.map((d) => ({ ...d, state: dealState(d) }) as Record<string, any> & { state: ReturnType<typeof dealState> });
+const liveCount = deals.filter((d) => d.state.live).length;
+const pending = snapshot.requests.filter((r) => r.status === 'pending');
+const decided = snapshot.requests.filter((r) => r.status === 'approved' || r.status === 'rejected').slice(0, 10);
+const media = await mediaForRequests(portal.db, [...pending, ...decided]);
+const pendingDeal = new Set(pending.filter((r) => r.deal_id).map((r) => r.deal_id));
+---
+
+<Portal title={merchant.name} me={portal.me} merchant={merchant}>
+  <a slot="actions" class="btn btn-primary" href={`/portal/${merchant.slug}/coupon/new`}>Add a coupon</a>
+
+  {notice && <p class="form-success" role="status">{notice}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+  {snapshot.merchant.status !== 'active' && (
+    <p class="form-error" role="status">This business is not showing on Pocket Perks at the moment. Contact Pocket Perks.</p>
+  )}
+
+  <section class="panel" aria-labelledby="pending-title">
+    <h2 id="pending-title">Waiting for approval ({pending.length})</h2>
+    <p class="panel-hint">Changes you have sent. They go on the site once Pocket Perks approves them.</p>
+    {pending.length === 0 ? (
+      <p class="empty-row">Nothing waiting.</p>
+    ) : (
+      pending.map((r) => (
+        <ChangeView request={r} media={media}>
+          {r.mine && (
+            <form method="post" class="inline-form" data-confirm="Withdraw this change? It will not be sent.">
+              <input type="hidden" name="intent" value="withdraw" />
+              <input type="hidden" name="id" value={r.id} />
+              <button class="btn btn-ghost btn-sm" type="submit">Withdraw</button>
+            </form>
+          )}
+        </ChangeView>
+      ))
+    )}
+  </section>
+
+  <section class="panel" aria-labelledby="coupons-title">
+    <h2 id="coupons-title">Your coupons</h2>
+    <p class="panel-hint">
+      {liveCount} of {snapshot.deal_limit} live {snapshot.deal_limit === 1 ? 'coupon' : 'coupons'} on the {snapshot.merchant.tier} plan.
+    </p>
+    {deals.length === 0 ? (
+      <p class="empty-row">No coupons yet. <a href={`/portal/${merchant.slug}/coupon/new`}>Add your first one</a>.</p>
+    ) : (
+      <ul class="list-plain coupons">
+        {deals.map((d) => (
+          <li class="coupon">
+            <div class="coupon-main">
+              <strong class="coupon-title">{d.headline}</strong>
+              <p class="coupon-meta">
+                <span class={`pill ${d.state.cls}`}>{d.state.label}</span>
+                <span>{d.ends_at ? `Ends ${formatDateTime(d.ends_at)}` : 'No end date'}</span>
+                {d.coupon_code && <span>Code {d.coupon_code}</span>}
+                {pendingDeal.has(d.id) && <span class="pill pill-paused">Change waiting</span>}
+              </p>
+            </div>
+            <a class="btn btn-outline btn-sm" href={`/portal/${merchant.slug}/coupon/${d.id}`}
+               aria-label={`Edit or end: ${d.headline}`}>Edit or end</a>
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
+
+  {decided.length > 0 && (
+    <section class="panel" aria-labelledby="decided-title">
+      <h2 id="decided-title">Recently reviewed</h2>
+      {decided.map((r) => <ChangeView request={r} media={media} />)}
+    </section>
+  )}
+</Portal>
+
+<style>
+  .inline-form { margin: 0; }
+  .coupons { display: flex; flex-direction: column; }
+  .coupon {
+    display: flex; justify-content: space-between; align-items: center; gap: var(--pp-space-3);
+    flex-wrap: wrap; padding-block: var(--pp-space-3); border-top: 1px solid var(--pp-line);
+  }
+  .coupon:first-child { border-top: 0; padding-top: 0; }
+  .coupon-main { min-width: 0; flex: 1 1 14rem; }
+  .coupon-title { overflow-wrap: anywhere; }
+  .coupon-meta { margin: var(--pp-space-1) 0 0; display: flex; flex-wrap: wrap; gap: var(--pp-space-1) var(--pp-space-3); align-items: center; font-size: var(--pp-text-sm); color: var(--pp-muted); }
+</style>

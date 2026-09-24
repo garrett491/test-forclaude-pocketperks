@@ -1,0 +1,89 @@
+---
+import Portal from '../../../layouts/Portal.astro';
+import SignOff from '../../../components/SignOff.astro';
+import ChangeView from '../../../components/ChangeView.astro';
+import { loadBusiness, pendingFor, DAY_NAMES } from '../../../lib/portal';
+import { submitChange } from '../../../lib/portal-submit';
+
+export const prerender = false;
+
+const portal = Astro.locals.portal;
+const loaded = await loadBusiness(portal, Astro.params.merchant);
+if (!loaded) return Astro.redirect('/portal', 302);
+const { merchant, snapshot } = loaded;
+
+type Row = { opens: string; closes: string; closed: boolean };
+let rows: Row[] = DAY_NAMES.map((_, day) => {
+  const h = snapshot.hours.find((x) => x.day_of_week === day);
+  return { opens: h?.opens_at?.slice(0, 5) ?? '', closes: h?.closes_at?.slice(0, 5) ?? '', closed: h?.is_closed ?? false };
+});
+let signedName = portal.me.display_name;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  signedName = String(form.get('signed_name') ?? signedName);
+  rows = DAY_NAMES.map((_, day) => ({
+    opens: String(form.get(`opens_${day}`) ?? '').trim(),
+    closes: String(form.get(`closes_${day}`) ?? '').trim(),
+    closed: form.get(`closed_${day}`) === 'on',
+  }));
+
+  const half = rows.map((r, day) => (!r.closed && !!r.opens !== !!r.closes ? DAY_NAMES[day] : null)).filter(Boolean);
+  if (half.length) {
+    error = `${half.join(', ')}: add both an opening and a closing time, tick Closed, or clear both.`;
+  } else {
+    // The same shape the database uses for the current hours, so an
+    // unchanged week is recognised as unchanged.
+    const days = rows
+      .map((r, day) => r.closed
+        ? { day, closed: true, opens: null, closes: null }
+        : r.opens && r.closes ? { day, closed: false, opens: r.opens, closes: r.closes } : null)
+      .filter(Boolean);
+    const result = await submitChange(Astro.locals, merchant, 'hours_update', null, { days }, form);
+    if (result.ok) return Astro.redirect(`/portal/${merchant.slug}?sent=1`, 303);
+    error = result.message;
+  }
+}
+
+const waiting = pendingFor(snapshot, (r) => r.kind === 'hours_update');
+---
+
+<Portal title="Opening hours" me={portal.me} merchant={merchant}>
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {waiting.length > 0 && (
+    <section class="panel">
+      <h2>Already waiting for approval</h2>
+      {waiting.map((r) => <ChangeView request={r} />)}
+    </section>
+  )}
+
+  <form method="post" class="panel">
+    <h2>Your week</h2>
+    <p class="panel-hint">
+      Leave a day blank if it varies. Your page shows “Open now” from these, and
+      Google uses them too.
+    </p>
+    <div class="hours-rows">
+      {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+        <div class="hours-row">
+          <span class="day">{DAY_NAMES[day]}</span>
+          <input class="input" type="time" name={`opens_${day}`} value={rows[day].opens}
+                 aria-label={`${DAY_NAMES[day]} opening time`} />
+          <input class="input" type="time" name={`closes_${day}`} value={rows[day].closes}
+                 aria-label={`${DAY_NAMES[day]} closing time`} />
+          <label class="switch">
+            <input type="checkbox" name={`closed_${day}`} checked={rows[day].closed} />
+            <span>Closed</span>
+          </label>
+        </div>
+      ))}
+    </div>
+    <SignOff name={signedName} />
+  </form>
+</Portal>
+
+<style>
+  .hours-rows { max-width: 36rem; }
+</style>

@@ -1,0 +1,92 @@
+---
+import AuthCard from '../../layouts/AuthCard.astro';
+import { getAuthClient } from '../../lib/admin';
+import { getPortalSession, portalMissing, safeNext } from '../../lib/portal';
+
+export const prerender = false;
+
+const params = Astro.url.searchParams;
+const destination = safeNext(params.get('next'), '/portal').startsWith('/portal')
+  ? safeNext(params.get('next'), '/portal')
+  : '/portal';
+
+let error: string | null = null;
+let notice: string | null = null;
+let submittedEmail = '';
+let unavailable = params.get('unavailable') === '1';
+
+if (Astro.request.method === 'GET') {
+  const { session, missing } = await getPortalSession(Astro.cookies, Astro.request);
+  if (session) return Astro.redirect(destination, 302);
+  unavailable = unavailable || missing;
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const email = String(form.get('email') ?? '').trim().toLowerCase();
+  const password = String(form.get('password') ?? '');
+  const intent = String(form.get('intent') ?? 'signin');
+  submittedEmail = email;
+  const db = getAuthClient(Astro.cookies, Astro.request);
+
+  if (intent === 'reset') {
+    if (!email) {
+      error = 'Type your email address above, then press “Forgot your password?”.';
+    } else {
+      await db.auth.resetPasswordForEmail(email, {
+        redirectTo: `${import.meta.env.PUBLIC_SITE_URL}/auth/set-password?next=/portal`,
+      });
+      // The same reply whether or not the address has a login.
+      notice = 'If that address has a business login, a link to choose a new password is on its way.';
+    }
+  } else if (!email || !password) {
+    error = 'Enter your email address and password.';
+  } else {
+    const { error: authError } = await db.auth.signInWithPassword({ email, password });
+    if (authError) {
+      error = 'That email address and password do not match.';
+    } else {
+      // The same client: the new session is in it, not yet in the request's cookies.
+      const { data, error: meError } = await db.rpc('portal_me');
+      const me = data as { is_active?: boolean } | null;
+      if (!meError && me?.is_active) return Astro.redirect(destination, 303);
+      const missing = portalMissing(meError);
+      await db.auth.signOut();
+      if (missing) {
+        unavailable = true;
+      } else {
+        error = 'That account does not have a business login, or it has been switched off. Contact Pocket Perks.';
+      }
+    }
+  }
+}
+---
+
+<AuthCard title="Sign in" eyebrow="Business login">
+  {unavailable && (
+    <p class="form-error" role="alert">The business portal is not switched on yet. Please check back soon.</p>
+  )}
+  {error && <p class="form-error" role="alert">{error}</p>}
+  {notice && <p class="form-success" role="status">{notice}</p>}
+
+  <form method="post" class="stack">
+    <div class="field">
+      <label for="email">Email address</label>
+      <input class="input" id="email" name="email" type="email" autocomplete="username" required autofocus
+             value={submittedEmail} />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input class="input" id="password" name="password" type="password" autocomplete="current-password" />
+    </div>
+    <button class="btn btn-primary btn-block" type="submit" name="intent" value="signin">Sign in</button>
+    <button class="btn btn-ghost btn-sm reset-btn" type="submit" name="intent" value="reset" formnovalidate>
+      Forgot your password? Email me a link
+    </button>
+  </form>
+
+  <p class="note">
+    For businesses listed on Pocket Perks. Logins are set up by Pocket Perks;
+    <a href="/for-business">ask about listing your business</a>.
+  </p>
+</AuthCard>

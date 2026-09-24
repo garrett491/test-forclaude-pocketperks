@@ -1,0 +1,133 @@
+---
+import Portal from '../../../layouts/Portal.astro';
+import SignOff from '../../../components/SignOff.astro';
+import ChangeView from '../../../components/ChangeView.astro';
+import ImageUpload from '../../../components/ImageUpload.astro';
+import { loadBusiness, pendingFor, mediaForRequests } from '../../../lib/portal';
+import { submitChange } from '../../../lib/portal-submit';
+
+export const prerender = false;
+
+const portal = Astro.locals.portal;
+const loaded = await loadBusiness(portal, Astro.params.merchant);
+if (!loaded) return Astro.redirect('/portal', 302);
+const { merchant, snapshot } = loaded;
+const m = snapshot.merchant;
+
+const FIELDS = ['tagline', 'description', 'phone_display', 'website_url', 'facebook_url', 'instagram_url',
+                'address_line1', 'address_line2', 'city', 'postal_code', 'logo_media_id', 'cover_media_id'] as const;
+let values: Record<string, string> = Object.fromEntries(FIELDS.map((f) => [f, (m[f] as string | null) ?? '']));
+let signedName = portal.me.display_name;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  signedName = String(form.get('signed_name') ?? signedName);
+  values = Object.fromEntries(FIELDS.map((f) => [f, String(form.get(f) ?? '').trim()]));
+
+  const httpsOnly = ['website_url', 'facebook_url', 'instagram_url'].find((f) => values[f] && !/^https:\/\//i.test(values[f]));
+  if (httpsOnly) {
+    error = 'Links must be full web addresses starting with https://';
+  } else if (values.postal_code && !/^[0-9]{5}(-[0-9]{4})?$/.test(values.postal_code)) {
+    error = 'ZIP code should be 5 digits, e.g. 44615.';
+  } else {
+    const result = await submitChange(Astro.locals, merchant, 'business_update', null, values, form);
+    if (result.ok) return Astro.redirect(`/portal/${merchant.slug}?sent=1`, 303);
+    error = result.message;
+  }
+}
+
+const waiting = pendingFor(snapshot, (r) => r.kind === 'business_update');
+const media = await mediaForRequests(portal.db, waiting);
+// After a failed send, show the photo they had just uploaded, not the old one.
+const uploaded = await mediaForRequests(portal.db, [{ payload: values, before_data: null }]);
+const logo = values.logo_media_id ? uploaded[values.logo_media_id] ?? snapshot.logo : null;
+const cover = values.cover_media_id ? uploaded[values.cover_media_id] ?? snapshot.cover : null;
+---
+
+<Portal title="Business details" me={portal.me} merchant={merchant}>
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {waiting.length > 0 && (
+    <section class="panel">
+      <h2>Already waiting for approval</h2>
+      {waiting.map((r) => <ChangeView request={r} media={media} />)}
+    </section>
+  )}
+
+  <form method="post" class="panel stack details-form">
+    <h2>What customers see on your page</h2>
+    <p class="panel-hint">
+      Change anything below and send it. Only what you changed is sent. Your
+      business name, category, town and plan are set by Pocket Perks; ask if
+      they need changing.
+    </p>
+
+    <div class="field">
+      <label for="tagline">Tagline <span class="opt">(optional)</span></label>
+      <input class="input" id="tagline" name="tagline" maxlength="120" value={values.tagline} />
+    </div>
+    <div class="field">
+      <label for="description">About the business <span class="opt">(optional)</span></label>
+      <textarea class="input" id="description" name="description" rows="5" maxlength="2000">{values.description}</textarea>
+    </div>
+
+    <div class="two">
+      <div class="field">
+        <label for="phone_display">Phone</label>
+        <input class="input" id="phone_display" name="phone_display" type="tel" autocomplete="tel" value={values.phone_display} />
+      </div>
+      <div class="field">
+        <label for="website_url">Website <span class="opt">(optional)</span></label>
+        <input class="input" id="website_url" name="website_url" type="url" placeholder="https://" value={values.website_url} />
+      </div>
+      <div class="field">
+        <label for="facebook_url">Facebook page <span class="opt">(optional)</span></label>
+        <input class="input" id="facebook_url" name="facebook_url" type="url" placeholder="https://facebook.com/…" value={values.facebook_url} />
+      </div>
+      <div class="field">
+        <label for="instagram_url">Instagram <span class="opt">(optional)</span></label>
+        <input class="input" id="instagram_url" name="instagram_url" type="url" placeholder="https://instagram.com/…" value={values.instagram_url} />
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="field">
+        <label for="address_line1">Street address</label>
+        <input class="input" id="address_line1" name="address_line1" autocomplete="address-line1" value={values.address_line1} />
+      </div>
+      <div class="field">
+        <label for="address_line2">Address line 2 <span class="opt">(optional)</span></label>
+        <input class="input" id="address_line2" name="address_line2" autocomplete="address-line2" value={values.address_line2} />
+      </div>
+      <div class="field">
+        <label for="city">City</label>
+        <input class="input" id="city" name="city" autocomplete="address-level2" value={values.city} />
+      </div>
+      <div class="field">
+        <label for="postal_code">ZIP code</label>
+        <input class="input" id="postal_code" name="postal_code" inputmode="numeric" autocomplete="postal-code" value={values.postal_code} />
+      </div>
+    </div>
+
+    <div class="uploads">
+      <ImageUpload name="logo_media_id" label="Logo" aspect="square" maxEdge={800} current={logo}
+                   endpoint="/api/portal/upload" merchantId={merchant.id}
+                   hint="Your logo. Any shape; it is never cropped." />
+      <ImageUpload name="cover_media_id" label="Cover photo" aspect="wide" maxEdge={1600} current={cover}
+                   endpoint="/api/portal/upload" merchantId={merchant.id}
+                   hint="The big photo on your card and page. A wide photo of the storefront or your food works best." />
+    </div>
+
+    <SignOff name={signedName} />
+  </form>
+</Portal>
+
+<style>
+  .details-form { max-width: 48rem; }
+  .details-form .input { width: 100%; }
+  .two { display: grid; gap: var(--pp-space-3); grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 40rem) { .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .uploads { display: grid; gap: var(--pp-space-5); }
+  .opt { font-weight: 400; color: var(--pp-muted); }
+</style>

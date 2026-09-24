@@ -27,6 +27,9 @@ case "${1:-}" in
     bash "$0" stop >/dev/null
     setsid nohup node tests/support/supabase-local.mjs > "$STATE/supabase.log" 2>&1 &
     echo $! > "$STATE/supabase.pid"
+    # Email goes to the stand-in's catcher, never to a real service.
+    export RESEND_API_KEY=test-key NOTIFY_FROM_EMAIL='Pocket Perks <test@example.com>' \
+           RESEND_API_URL=http://127.0.0.1:54321/__email ADMIN_NOTIFY_EMAIL=owner@example.com
     if [[ "$mode" == "preview" ]]; then
       PP_ID_CACHE_TTL_MS=0 setsid nohup node --env-file=.env tests/support/serve-build.mjs > "$STATE/web.log" 2>&1 &
     else

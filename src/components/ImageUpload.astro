@@ -19,14 +19,19 @@ interface Props {
   /** Longest edge after resizing. Logos need far less than cover photos. */
   maxEdge?: number;
   aspect?: 'square' | 'wide';
+  /** Where the file is sent. The business portal has its own endpoint. */
+  endpoint?: string;
+  /** Portal uploads say which business the photo is for. */
+  merchantId?: string;
 }
 
-const { name, label, hint, current = null, maxEdge = 1200, aspect = 'wide' } = Astro.props;
+const { name, label, hint, current = null, maxEdge = 1200, aspect = 'wide', endpoint, merchantId } = Astro.props;
 const kind = aspect === 'square' ? 'logo' : 'photo';
 const safeId = name.replace(/[^a-z0-9_-]/gi, '-');
 ---
 
-<div class="upload" data-upload data-max-edge={maxEdge} data-kind={kind}>
+<div class="upload" data-upload data-max-edge={maxEdge} data-kind={kind}
+     data-endpoint={endpoint} data-merchant={merchantId}>
   <span class="upload-label" id={`${safeId}-label`}>{label}</span>
 
   <input type="hidden" name={name} value={current?.id ?? ''} data-media-id />

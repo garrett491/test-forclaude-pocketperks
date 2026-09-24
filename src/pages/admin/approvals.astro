@@ -1,0 +1,135 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import ChangeView from '../../components/ChangeView.astro';
+import { humanError } from '../../lib/admin';
+import { mediaForRequests, portalMissing, type PortalRequest } from '../../lib/portal';
+import { sendEmail, changeReviewedEmail } from '../../lib/notify';
+
+export const prerender = false;
+
+/**
+ * Changes sent by businesses, waiting for you. Approve applies the change
+ * to the live site straight away (the database does it, as you); Not
+ * approved leaves the site untouched and tells the business why, if you
+ * add a note.
+ */
+const { db, profile } = Astro.locals;
+const params = Astro.url.searchParams;
+let notice: string | null =
+  params.get('done') === 'approved' ? 'Approved. It is on the site now.' :
+  params.get('done') === 'rejected' ? 'Marked as not approved. Nothing on the site changed.' : null;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const id = String(form.get('id') ?? '');
+  const approve = form.get('intent') === 'approve';
+  const note = String(form.get('note') ?? '').trim() || null;
+  const { data, error: rpcError } = await db.rpc('review_change', { p_id: id, p_approve: approve, p_note: note });
+  const result = data as {
+    ok: boolean; message?: string; code?: string; status?: string; summary?: string;
+    signed_name?: string; signed_email?: string; merchant_id?: string; merchant_name?: string;
+  } | null;
+
+  if (rpcError || !result?.ok) {
+    error = rpcError
+      ? humanError(rpcError)
+      : result?.code ? `This change cannot be applied: ${humanError({ code: result.code, message: result.message })}`
+      : result?.message ?? 'That did not work. Reload and try again.';
+  } else {
+    if (result.signed_email) {
+      const { data: m } = await db.from('merchants').select('slug').eq('id', result.merchant_id!).maybeSingle();
+      await sendEmail(changeReviewedEmail(result.signed_email, {
+        signedName: result.signed_name ?? '',
+        merchantName: result.merchant_name ?? '',
+        summary: result.summary ?? '',
+        approved: approve,
+        note,
+        slug: (m as { slug: string } | null)?.slug ?? null,
+      }));
+    }
+    return Astro.redirect(`/admin/approvals?done=${approve ? 'approved' : 'rejected'}`, 303);
+  }
+}
+
+const select = 'id, merchant_id, kind, summary, deal_id, payload, before_data, signed_name, signed_email, submitted_at, status, reviewed_at, reviewer_name, review_note, merchant:merchants ( name, slug )';
+const [pendingRes, historyRes] = await Promise.all([
+  db.from('change_requests').select(select).eq('status', 'pending').order('submitted_at'),
+  db.from('change_requests').select(select).neq('status', 'pending').order('submitted_at', { ascending: false }).limit(30),
+]);
+const missing = portalMissing(pendingRes.error);
+const shape = (rows: any[] | null) =>
+  (rows ?? []).map((r) => ({ ...r, mine: false, merchant_name: r.merchant?.name ?? '' })) as (PortalRequest & { merchant_name: string; merchant: { slug: string } | null })[];
+const pending = shape(pendingRes.data);
+const history = shape(historyRes.data);
+const media = await mediaForRequests(db, [...pending, ...history]);
+---
+
+<Admin title="Approvals" profile={profile}>
+  <a slot="actions" class="btn btn-outline btn-sm" href="/admin/business-logins">Business logins</a>
+
+  {notice && <p class="form-success" role="status">{notice}</p>}
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {missing ? (
+    <section class="panel">
+      <h2>Business logins are not switched on yet</h2>
+      <p class="panel-hint">
+        Run <code>supabase/migrations/0010_business_portal.sql</code> in the Supabase SQL Editor, then reload this page.
+      </p>
+    </section>
+  ) : (
+    <>
+      <section class="panel" aria-labelledby="waiting-title">
+        <h2 id="waiting-title">Waiting for you ({pending.length})</h2>
+        <p class="panel-hint">Oldest first. Approving puts the change on the site straight away.</p>
+        {pending.length === 0 ? (
+          <p class="empty-row">Nothing waiting. You’re all caught up.</p>
+        ) : pending.map((r) => (
+          <ChangeView request={r} media={media}>
+            <div class="decide">
+              <form method="post">
+                <input type="hidden" name="id" value={r.id} />
+                <input type="hidden" name="intent" value="approve" />
+                <button class="btn btn-primary" type="submit">Approve</button>
+              </form>
+              <details class="reject">
+                <summary class="btn btn-outline">Don’t approve…</summary>
+                <form method="post" class="stack">
+                  <input type="hidden" name="id" value={r.id} />
+                  <input type="hidden" name="intent" value="reject" />
+                  <div class="field">
+                    <label for={`note-${r.id}`}>Note to {r.signed_name} <span class="opt">(optional)</span></label>
+                    <textarea class="input" id={`note-${r.id}`} name="note" rows="2" maxlength="500"
+                              placeholder="e.g. Please add the end date and send it again."></textarea>
+                  </div>
+                  <button class="btn btn-danger btn-sm" type="submit">Don’t approve</button>
+                </form>
+              </details>
+              {r.merchant?.slug && <a class="btn btn-ghost btn-sm" href={`/b/${r.merchant.slug}`} target="_blank" rel="noopener">See their page</a>}
+            </div>
+          </ChangeView>
+        ))}
+      </section>
+
+      {history.length > 0 && (
+        <section class="panel" aria-labelledby="history-title">
+          <h2 id="history-title">Recently decided</h2>
+          <p class="panel-hint">The last 30. Every approved change is also in the change history with the before and after.</p>
+          {history.map((r) => <ChangeView request={r} media={media} />)}
+        </section>
+      )}
+    </>
+  )}
+</Admin>
+
+<style>
+  .decide { display: flex; gap: var(--pp-space-2); flex-wrap: wrap; align-items: flex-start; }
+  .decide form { margin: 0; }
+  .reject { flex: 0 1 26rem; }
+  .reject[open] { flex-basis: 100%; }
+  .reject summary { list-style: none; }
+  .reject summary::-webkit-details-marker { display: none; }
+  .reject form { margin-top: var(--pp-space-3); max-width: 32rem; }
+  .opt { font-weight: 400; color: var(--pp-muted); }
+</style>

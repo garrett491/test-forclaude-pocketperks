@@ -1,0 +1,30 @@
+---
+import Portal from '../../layouts/Portal.astro';
+
+export const prerender = false;
+
+const { me } = Astro.locals.portal;
+if (me.merchants.length === 1) return Astro.redirect(`/portal/${me.merchants[0].slug}`, 302);
+---
+
+<Portal title="Your businesses" me={me}>
+  {me.merchants.length === 0 ? (
+    <section class="panel">
+      <h2>No businesses yet</h2>
+      <p class="panel-hint">This login is not linked to a business at the moment. Contact Pocket Perks.</p>
+    </section>
+  ) : (
+    <section class="panel">
+      <h2>Choose a business</h2>
+      <ul class="list-plain biz-list">
+        {me.merchants.map((m) => (
+          <li><a class="btn btn-outline" href={`/portal/${m.slug}`}>{m.name}</a></li>
+        ))}
+      </ul>
+    </section>
+  )}
+</Portal>
+
+<style>
+  .biz-list { display: flex; flex-direction: column; gap: var(--pp-space-2); align-items: flex-start; }
+</style>

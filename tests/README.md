@@ -6,7 +6,7 @@ Supabase project.
 | Suite | Command | What it proves |
 |---|---|---|
 | Unit | `npm test` | Card deal limits and "+N more", sorting, pagination, search-term cleaning, expiry wording in Ohio time, image `srcset`/aspect maths, town cookie handling, admin write checks. |
-| Database | `PGUSER=postgres npm run test:db` | Every migration applies to a fresh database and can be re-run. RLS keeps drafts, archived businesses, subscribers and enquiries away from the public. Admin rights come from the `profiles` table, not the browser. Plan limits and consent columns hold. |
+| Database | `PGUSER=postgres npm run test:db` | Every migration applies to a fresh database and can be re-run. RLS keeps drafts, archived businesses, subscribers and enquiries away from the public. Admin rights come from the `profiles` table, not the browser. Plan limits and consent columns hold. Business logins can reach only their own business, cannot skip approval, cannot read special words, and are locked out after five wrong words. |
 | Browser | `npm run test:e2e` | The production build, served the way Netlify serves it, driven by Chromium at phone size, against the real migrations and RLS. |
 
 ## What you need
@@ -81,6 +81,7 @@ bash tests/support/services.sh stop
 | `layout-images.spec.ts` | No horizontal scroll at every width from 320px to large desktop; every image drawn whole (not cropped or stretched); missing images fall back to an initials tile; a tall flyer shows its fine print; card image bands line up; tap targets are big enough. |
 | `accessibility.spec.ts` | axe-core (WCAG 2.0–2.2 A/AA rules plus best practice) on every public page at phone and desktop widths; the homepage by keyboard alone; text enlarged to 200%. |
 | `admin.spec.ts` | Sign-in gate, non-admins refused, password reset; switches, deals, content and settings save, survive a reload and show on the site; Ohio-time end dates; validation (dates, hours, https links); plan limits explained; uploads preview, save, show whole and store the 1200px copy phones load; failed saves keep what was typed; archiving asks first. |
+| `portal.spec.ts` | Business portal: closed to visitors and non-members; a wrong special word sends nothing; coupons, ending a coupon, details, hours and photos all wait for approval; approve and reject (with note) from the admin; emails to both sides; the full new-login flow (link, password, name and special word, link works once, switch off); accessibility and no sideways scroll on every portal and approval page. |
 | `forms.spec.ts` | Newsletter signup (with and without JavaScript), consent record, unsubscribe and re-signup, business enquiry reaching the admin, click tracking without IP addresses, robots filtered out. |
 
 ## What these tests cannot tell you

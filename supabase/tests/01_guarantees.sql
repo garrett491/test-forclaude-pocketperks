@@ -397,4 +397,202 @@ select tests.assert(
 reset role;
 select set_config('request.jwt.claim.sub', '', false);
 
+-- =====================================================================
+-- 10. Business portal (0010)
+-- =====================================================================
+
+select tests.assert(
+  not has_function_privilege('anon', 'public.prune_events(integer)', 'execute')
+  and not has_function_privilege('authenticated', 'public.rollup_events(date)', 'execute'),
+  '10.0 nobody outside the server can delete or rebuild visit records');
+
+insert into public.merchants (name, category_id, town_id, phone_display, status, tier)
+select 'Portal Test Cafe',
+       (select id from public.categories where slug = 'food-drink'),
+       (select id from public.towns where slug = 'carrollton'),
+       '(330) 555-0188', 'active', 'premium'
+where not exists (select 1 from public.merchants where name = 'Portal Test Cafe');
+
+insert into auth.users (id, email)
+values ('33333333-3333-3333-3333-333333333333', 'owner@testpizza.example')
+on conflict do nothing;
+insert into public.portal_users (user_id, email, display_name)
+values ('33333333-3333-3333-3333-333333333333', 'owner@testpizza.example', '')
+on conflict do nothing;
+insert into public.merchant_members (user_id, merchant_id)
+select '33333333-3333-3333-3333-333333333333', id from public.merchants
+where name in ('Test Pizza Co', 'Portal Test Cafe')
+on conflict do nothing;
+
+-- Standard allows 2 live coupons, and Test Pizza Co already has 2.
+update public.merchants set tier = 'standard' where name = 'Test Pizza Co';
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '33333333-3333-3333-3333-333333333333', false);
+
+select tests.assert_blocked(
+  $$insert into public.deals (merchant_id, headline, status)
+    values ((select id from public.merchants where name = 'Portal Test Cafe'), 'Sneaked straight in', 'active')$$,
+  '10.1 a business login cannot write a coupon straight onto the site');
+
+update public.merchants set is_featured = true, tier = 'premium' where name = 'Test Pizza Co';
+update public.deals set headline = 'Changed without approval'
+ where merchant_id = (select id from public.merchants where name = 'Test Pizza Co');
+
+select tests.assert_blocked(
+  $$select public.portal_snapshot((select id from public.merchants where name = 'Limit Check Diner'))$$,
+  '10.2 a business login cannot see another business''s portal');
+
+select tests.assert_blocked(
+  $$select secret_hash from public.portal_users$$,
+  '10.3 nobody can read a special word, even scrambled');
+
+select tests.assert_blocked(
+  $$select public.portal_apply((select id from public.merchants where name = 'Portal Test Cafe'),
+                               'deal_create', null, '{"headline":"Bypass approval"}'::jsonb)$$,
+  '10.4 the function that applies changes cannot be called directly');
+
+select tests.assert_blocked(
+  $$select public.review_change((select id from public.change_requests limit 1), true, null)$$,
+  '10.5 a business login cannot approve anything');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Portal Test Cafe'),
+     'deal_create', null, '{"headline":"Free cookie with coffee"}'::jsonb, 'Pat Owner', 'anything') ->> 'ok')::boolean = false,
+  '10.6 nothing can be sent before a special word is set');
+
+select tests.assert(
+  (public.portal_set_secret('Pat Owner', 'blue heron') ->> 'ok')::boolean,
+  '10.7 a business login can set its name and special word');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Portal Test Cafe'),
+     'deal_create', null, '{"headline":"Free cookie with coffee"}'::jsonb, 'Pat Owner', 'wrong word') ->> 'ok')::boolean = false,
+  '10.8 a wrong special word is refused');
+select tests.assert(
+  (select failed_attempts from public.portal_users where user_id = auth.uid()) = 1,
+  '10.8b and counted towards the lockout');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Portal Test Cafe'),
+     'deal_create', null,
+     '{"headline":"Free cookie with coffee","coupon_code":"COOKIE","is_featured":true,"merchant_id":"00000000-0000-0000-0000-000000000000"}'::jsonb,
+     'Pat Owner', '  Blue Heron ') ->> 'ok')::boolean,
+  '10.9 the right word (any capitals or spacing) sends the change for approval');
+
+select tests.assert(
+  (select count(*) from public.deals where headline = 'Free cookie with coffee') = 0,
+  '10.10 a submitted coupon is not on the site until approved');
+
+select tests.assert(
+  (select count(*) from public.change_requests) = 0,
+  '10.11 a business login cannot list change requests directly');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Test Pizza Co'),
+     'deal_create', null, '{"headline":"One more than the plan allows"}'::jsonb, 'Pat Owner', 'blue heron')
+     ->> 'message') like '%plan, which includes%',
+  '10.12 the plan''s coupon limit is explained when the business submits, not at approval');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Portal Test Cafe'),
+     'deal_update', (select id from public.deals where headline = 'Current deal still running'),
+     '{"status":"paused"}'::jsonb, 'Pat Owner', 'blue heron') ->> 'ok')::boolean = false,
+  '10.13 a business cannot touch another business''s coupon');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Test Pizza Co'),
+     'business_update', null,
+     '{"tagline":"Hand-tossed since 1998","tier":"premium","is_featured":true,"name":"Best Pizza Ever"}'::jsonb,
+     'Pat Owner', 'blue heron') ->> 'ok')::boolean,
+  '10.14 business details can be proposed');
+
+select tests.assert(
+  (select (public.portal_snapshot((select id from public.merchants where name = 'Test Pizza Co'))
+     -> 'requests' -> 0 -> 'payload') = '{"tagline":"Hand-tossed since 1998"}'::jsonb),
+  '10.15 plan, featured and business name are stripped from what a business sends');
+
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Test Pizza Co'),
+     'business_update', null, '{"tagline":"Hand-tossed since 1998"}'::jsonb, 'Pat Owner', 'blue heron')
+     ->> 'ok')::boolean
+  and (public.submit_change((select id from public.merchants where name = 'Test Pizza Co'),
+     'business_update', null, '{"website_url":"www.no-https.example"}'::jsonb, 'Pat Owner', 'blue heron')
+     ->> 'ok')::boolean = false,
+  '10.16 a bad link is refused on the form, before it reaches the approval queue');
+
+-- Photos: only into the business's own pending folder.
+select tests.assert_blocked(
+  $$insert into storage.objects (bucket_id, name)
+    values ('merchant-media', 'pending/' || (select id from public.merchants where name = 'Limit Check Diner') || '/x.webp')$$,
+  '10.17 a business cannot upload photos for another business');
+
+insert into storage.objects (bucket_id, name)
+values ('merchant-media', 'pending/' || (select id from public.merchants where name = 'Portal Test Cafe') || '/ok.webp');
+select tests.assert_blocked(
+  $$insert into storage.objects (bucket_id, name) values ('merchant-media', 'uploads/2026/live.webp')$$,
+  '10.18 and cannot put photos anywhere the site already uses');
+
+-- Five wrong words lock the login for 15 minutes, even for the right word.
+do $$
+declare i int;
+begin
+  for i in 1..5 loop
+    perform public.submit_change((select id from public.merchants where name = 'Portal Test Cafe'),
+      'deal_create', null, '{"headline":"Guessing"}'::jsonb, 'Pat Owner', 'guess ' || i);
+  end loop;
+end $$;
+select tests.assert(
+  (public.submit_change((select id from public.merchants where name = 'Portal Test Cafe'),
+     'deal_create', null, '{"headline":"Right word, too late"}'::jsonb, 'Pat Owner', 'blue heron')
+     ->> 'message') like 'Too many wrong special words%',
+  '10.19 five wrong special words lock the login for 15 minutes');
+
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+
+select tests.assert(
+  (select count(*) from public.merchants where name = 'Test Pizza Co' and (is_featured or tier = 'premium')) = 0
+  and (select count(*) from public.deals where headline = 'Changed without approval') = 0,
+  '10.20 direct edits by a business login changed nothing');
+
+select tests.assert(
+  (select signed_name = 'Pat Owner' and signed_email = 'owner@testpizza.example' and submitted_at is not null
+     from public.change_requests where summary = 'New coupon: Free cookie with coffee'),
+  '10.21 each change records the typed name, the login email and the time');
+
+-- The administrator approves one and rejects another.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
+
+select tests.assert(
+  (public.review_change((select id from public.change_requests where summary = 'New coupon: Free cookie with coffee'), true, null)
+     ->> 'ok')::boolean,
+  '10.22 an administrator approves with one call');
+
+select tests.assert(
+  (public.review_change((select id from public.change_requests where summary = 'Business details' order by submitted_at limit 1), false, 'Please add your full address too.')
+     ->> 'ok')::boolean,
+  '10.23 an administrator rejects with a note');
+
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+
+select tests.assert(
+  (select count(*) from public.deals d join public.merchants m on m.id = d.merchant_id
+    where d.headline = 'Free cookie with coffee' and d.coupon_code = 'COOKIE'
+      and d.status = 'active' and not d.is_featured and m.name = 'Portal Test Cafe') = 1,
+  '10.24 an approved coupon goes live, on the right business, without the extras it tried to set');
+
+select tests.assert(
+  (select tagline from public.merchants where name = 'Test Pizza Co') is distinct from 'Hand-tossed since 1998'
+  and (select review_note from public.change_requests where summary = 'Business details' order by submitted_at limit 1) = 'Please add your full address too.',
+  '10.25 a rejected change is not applied, and the note is kept');
+
+select tests.assert(
+  (select actor_id from public.audit_log where entity_type = 'deals'
+     and after_data ->> 'headline' = 'Free cookie with coffee' order by occurred_at desc limit 1)
+   = '11111111-1111-1111-1111-111111111111',
+  '10.26 the change history names the administrator who approved it');
+
 do $$ begin raise notice '--- all guarantees hold ---'; end $$;

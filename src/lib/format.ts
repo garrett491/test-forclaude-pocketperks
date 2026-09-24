@@ -209,6 +209,15 @@ export function formatDate(iso: string | null | undefined, withYear = true): str
   });
 }
 
+/** "Sep 24, 2026, 3:05 PM", in Ohio time. For signatures and history. */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    timeZone: SITE_TIME_ZONE,
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Contact                                                             */
 /* ------------------------------------------------------------------ */

@@ -1,0 +1,156 @@
+---
+import Portal from '../../../../layouts/Portal.astro';
+import SignOff from '../../../../components/SignOff.astro';
+import ChangeView from '../../../../components/ChangeView.astro';
+import { loadBusiness, pendingFor, mediaForRequests } from '../../../../lib/portal';
+import { submitChange } from '../../../../lib/portal-submit';
+import { timestamp, toLocalInput } from '../../../../lib/admin';
+
+export const prerender = false;
+
+/**
+ * Add a coupon, change one, or end one. Nothing here changes the site:
+ * each form sends a signed change for approval.
+ */
+const portal = Astro.locals.portal;
+const loaded = await loadBusiness(portal, Astro.params.merchant);
+if (!loaded) return Astro.redirect('/portal', 302);
+const { merchant, snapshot } = loaded;
+
+const isNew = Astro.params.id === 'new';
+const deal = isNew ? null : snapshot.deals.find((d) => d.id === Astro.params.id) ?? null;
+if (!isNew && !deal) return Astro.redirect(`/portal/${merchant.slug}`, 302);
+
+const fields = ['headline', 'description', 'terms', 'restrictions', 'coupon_code', 'starts_at', 'ends_at'] as const;
+let values: Record<string, string> = {
+  headline: deal?.headline ?? '',
+  description: deal?.description ?? '',
+  terms: deal?.terms ?? '',
+  restrictions: deal?.restrictions ?? '',
+  coupon_code: deal?.coupon_code ?? '',
+  starts_at: toLocalInput(deal?.starts_at),
+  ends_at: toLocalInput(deal?.ends_at),
+};
+let signedName = portal.me.display_name;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  signedName = String(form.get('signed_name') ?? signedName);
+  const intent = String(form.get('intent') ?? 'save');
+
+  let payload: Record<string, unknown>;
+  if (intent === 'end' || intent === 'restore') {
+    payload = { status: intent === 'end' ? 'paused' : 'active' };
+  } else {
+    values = Object.fromEntries(fields.map((f) => [f, String(form.get(f) ?? '').trim()]));
+    payload = {
+      headline: values.headline,
+      description: values.description,
+      terms: values.terms,
+      restrictions: values.restrictions,
+      coupon_code: values.coupon_code,
+      starts_at: timestamp(form, 'starts_at') ?? '',
+      ends_at: timestamp(form, 'ends_at') ?? '',
+    };
+    if (isNew) payload.status = 'active';
+  }
+
+  if (intent === 'save' && values.headline.length < 3) {
+    error = 'Give the coupon a headline of at least 3 characters.';
+  } else if (intent === 'save' && values.coupon_code && !/^[A-Za-z0-9._-]{2,24}$/.test(values.coupon_code)) {
+    error = 'Coupon codes can use letters, numbers, dots and dashes only (2 to 24 of them).';
+  } else {
+    const result = await submitChange(Astro.locals, merchant, isNew ? 'deal_create' : 'deal_update',
+      deal?.id ?? null, payload, form);
+    if (result.ok) return Astro.redirect(`/portal/${merchant.slug}?sent=1`, 303);
+    error = result.message;
+  }
+}
+
+const waiting = deal ? pendingFor(snapshot, (r) => r.deal_id === deal.id) : [];
+const media = await mediaForRequests(portal.db, waiting);
+const ended = deal && (deal.status === 'paused' || (deal.ends_at && Date.parse(deal.ends_at) <= Date.now()));
+---
+
+<Portal title={isNew ? 'Add a coupon' : 'Edit or end a coupon'} me={portal.me} merchant={merchant}>
+  <p><a href={`/portal/${merchant.slug}`}>← Back to your coupons</a></p>
+  {error && <p class="form-error" role="alert">{error}</p>}
+
+  {waiting.length > 0 && (
+    <section class="panel">
+      <h2>Already waiting for approval</h2>
+      <p class="panel-hint">You can still send another change. Each one is reviewed separately.</p>
+      {waiting.map((r) => <ChangeView request={r} media={media} />)}
+    </section>
+  )}
+
+  <form method="post" class="panel stack coupon-form">
+    <h2>{isNew ? 'The new coupon' : 'Change this coupon'}</h2>
+    <input type="hidden" name="intent" value="save" />
+
+    <div class="field">
+      <label for="headline">Headline</label>
+      <input class="input" id="headline" name="headline" required minlength="3" maxlength="120" value={values.headline} />
+      <p class="hint">What the customer gets, e.g. “$5 off any large pizza”.</p>
+    </div>
+
+    <div class="field">
+      <label for="restrictions">Limits <span class="opt">(optional)</span></label>
+      <input class="input" id="restrictions" name="restrictions" maxlength="120" value={values.restrictions} />
+      <p class="hint">A short line shown on the card, e.g. “One per visit. Dine-in only.”</p>
+    </div>
+
+    <div class="field">
+      <label for="description">Description <span class="opt">(optional)</span></label>
+      <textarea class="input" id="description" name="description" rows="3" maxlength="1000">{values.description}</textarea>
+    </div>
+
+    <div class="field">
+      <label for="terms">Terms <span class="opt">(optional)</span></label>
+      <textarea class="input" id="terms" name="terms" rows="3" maxlength="1000">{values.terms}</textarea>
+    </div>
+
+    <div class="field">
+      <label for="coupon_code">Coupon code <span class="opt">(optional)</span></label>
+      <input class="input" id="coupon_code" name="coupon_code" maxlength="24" value={values.coupon_code}
+             autocapitalize="characters" spellcheck="false" />
+    </div>
+
+    <div class="date-row">
+      <div class="field">
+        <label for="starts_at">Starts <span class="opt">(optional)</span></label>
+        <input class="input" id="starts_at" name="starts_at" type="datetime-local" value={values.starts_at} />
+      </div>
+      <div class="field">
+        <label for="ends_at">Ends <span class="opt">(optional)</span></label>
+        <input class="input" id="ends_at" name="ends_at" type="datetime-local" value={values.ends_at} />
+      </div>
+    </div>
+    <p class="hint">Ohio time. Leave the end empty if the coupon has no end date. It comes off the site by itself when it ends.</p>
+
+    <SignOff name={signedName} idPrefix="save" />
+  </form>
+
+  {deal && (
+    <form method="post" class="panel stack">
+      <h2>{ended ? 'Put this coupon back on the site' : 'End this coupon now'}</h2>
+      <p class="panel-hint">
+        {ended
+          ? 'Sends a request to show this coupon again. Change the end date above instead if it has run out.'
+          : 'Sends a request to take this coupon off the site, for example if you have run out. It stays up until approved.'}
+      </p>
+      <input type="hidden" name="intent" value={ended ? 'restore' : 'end'} />
+      <SignOff name={signedName} idPrefix="end" action={ended ? 'Send: put it back' : 'Send: end this coupon'} danger={!ended} />
+    </form>
+  )}
+</Portal>
+
+<style>
+  .coupon-form { max-width: 40rem; }
+  .coupon-form > .hint { margin: 0; font-size: var(--pp-text-sm); color: var(--pp-muted); }
+  .coupon-form .input { width: 100%; }
+  .date-row { display: grid; gap: var(--pp-space-3); grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 36rem) { .date-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .opt { font-weight: 400; color: var(--pp-muted); }
+</style>

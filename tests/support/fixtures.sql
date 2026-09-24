@@ -162,6 +162,19 @@ on conflict do nothing;
 -- existed when it ran. These fixtures are inserted afterwards, so set it.
 update public.merchants set show_in_carousel = true where tier = 'premium';
 
+-- A business login for Tall Tales Books (b...0002), ready to use:
+-- signed in with correct-horse-battery, special word "blue heron".
+insert into auth.users (id, email, test_password) values
+  ('44444444-4444-4444-4444-444444444444', 'books@example.com', 'correct-horse-battery')
+on conflict (id) do update set test_password = excluded.test_password;
+insert into public.portal_users (user_id, email, display_name, secret_hash, secret_set_at)
+values ('44444444-4444-4444-4444-444444444444', 'books@example.com', 'Sam Reader',
+        extensions.crypt('blue heron', extensions.gen_salt('bf', 8)), now())
+on conflict (user_id) do nothing;
+insert into public.merchant_members (user_id, merchant_id)
+values ('44444444-4444-4444-4444-444444444444', 'b0000000-0000-0000-0000-000000000002')
+on conflict do nothing;
+
 -- Hosted Supabase grants the service role full access to public tables by
 -- default; the local stub does not, so grant it here. RLS still applies
 -- to anon and authenticated exactly as in production.

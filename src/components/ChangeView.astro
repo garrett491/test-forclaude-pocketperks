@@ -1,0 +1,167 @@
+---
+import MediaFrame from './MediaFrame.astro';
+import type { MediaAsset } from '../lib/types';
+import type { PortalRequest } from '../lib/portal';
+import { FIELD_LABELS, STATUS_LABELS, DAY_NAMES } from '../lib/portal';
+import { formatDateTime } from '../lib/format';
+
+/**
+ * One proposed change: what it would change, from what to what, who signed
+ * it and when, and what happened to it. The same view is shown to the
+ * business in their portal and to you on the approvals page.
+ */
+interface Props {
+  request: PortalRequest & { merchant_name?: string };
+  media?: Record<string, MediaAsset>;
+  headingLevel?: 'h2' | 'h3';
+}
+
+const { request: r, media = {}, headingLevel = 'h3' } = Astro.props;
+const Heading = headingLevel;
+
+const MEDIA_KEYS = new Set(['logo_media_id', 'cover_media_id', 'media_id']);
+const DATE_KEYS = new Set(['starts_at', 'ends_at']);
+
+function show(key: string, value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  if (key === 'status') return value === 'active' ? 'Live' : value === 'paused' ? 'Hidden (ended)' : String(value);
+  if (DATE_KEYS.has(key)) return formatDateTime(String(value));
+  return String(value);
+}
+
+const payload = (r.payload ?? {}) as Record<string, any>;
+const before = (r.before_data ?? {}) as Record<string, any>;
+const isTable = r.kind === 'deal_create' || r.kind === 'deal_update' || r.kind === 'business_update';
+// Always in the same order as the forms, whatever order the database kept.
+const ORDER = Object.keys(FIELD_LABELS);
+const rows = isTable
+  ? Object.keys(payload)
+      .filter((key) => r.kind !== 'deal_create' || show(key, payload[key]) !== '')
+      .sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b))
+      .map((key) => ({ key, label: FIELD_LABELS[key] ?? key, from: before[key], to: payload[key] }))
+  : [];
+
+type Day = { day: number; closed: boolean; opens: string | null; closes: string | null };
+const dayText = (d: Day | undefined) =>
+  !d ? 'Not listed' : d.closed ? 'Closed' : `${d.opens ?? '?'} – ${d.closes ?? '?'}`;
+const hoursRows = r.kind === 'hours_update'
+  ? DAY_NAMES.map((name, day) => {
+      const was = (before.days as Day[] | undefined)?.find((d) => d.day === day);
+      const now = (payload.days as Day[] | undefined)?.find((d) => d.day === day);
+      return { name, from: dayText(was), to: dayText(now) };
+    })
+  : [];
+
+const photoId = r.kind === 'gallery_add' ? payload.media_id : r.kind === 'gallery_remove' ? before.media_id : null;
+const statusClass = { pending: 'pill-paused', approved: 'pill-active', rejected: 'pill-archived', withdrawn: 'pill-draft' }[r.status];
+---
+
+<article class="change" data-change={r.id}>
+  <div class="change-head">
+    <Heading class="change-title">
+      {r.merchant_name && <span class="change-biz">{r.merchant_name}</span>}
+      {r.summary}
+    </Heading>
+    <span class={`pill ${statusClass}`}>{STATUS_LABELS[r.status]}</span>
+  </div>
+
+  <p class="change-signed">
+    Signed by <strong>{r.signed_name}</strong> ({r.signed_email})
+    on <time datetime={r.submitted_at}>{formatDateTime(r.submitted_at)}</time>
+    <span class="checked">· special word checked ✓</span>
+  </p>
+
+  {isTable && rows.length > 0 && (
+    <div class="table-wrap" tabindex="0" role="region" aria-label={`${r.summary}: what changes`}>
+      <table class="admin-table change-table">
+        <thead>
+          <tr>
+            <th scope="col">What</th>
+            {r.kind !== 'deal_create' && <th scope="col">Now</th>}
+            <th scope="col">{r.kind === 'deal_create' ? 'New coupon' : 'Change to'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr>
+              <th scope="row">{row.label}</th>
+              {r.kind !== 'deal_create' && (
+                <td class="was">
+                  {MEDIA_KEYS.has(row.key)
+                    ? (row.from && media[row.from]
+                        ? <div class="thumb"><MediaFrame asset={media[row.from]} mode="box" ratio={1.6} kind={row.key === 'logo_media_id' ? 'logo' : 'photo'} alt="" name={row.label} width={240} /></div>
+                        : <span class="empty">None</span>)
+                    : (show(row.key, row.from) || <span class="empty">Empty</span>)}
+                </td>
+              )}
+              <td class="now">
+                {MEDIA_KEYS.has(row.key)
+                  ? (row.to && media[row.to]
+                      ? <div class="thumb"><MediaFrame asset={media[row.to]} mode="box" ratio={1.6} kind={row.key === 'logo_media_id' ? 'logo' : 'photo'} alt="" name={row.label} width={240} /></div>
+                      : <span class="empty">Removed</span>)
+                  : (show(row.key, row.to) || <span class="empty">Removed</span>)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+
+  {hoursRows.length > 0 && (
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Opening hours: what changes">
+      <table class="admin-table change-table">
+        <thead><tr><th scope="col">Day</th><th scope="col">Now</th><th scope="col">Change to</th></tr></thead>
+        <tbody>
+          {hoursRows.map((row) => (
+            <tr class={row.from !== row.to ? 'differs' : undefined}>
+              <th scope="row">{row.name}</th><td class="was">{row.from}</td><td class="now">{row.to}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+
+  {photoId && (
+    <div class="change-photo">
+      {media[photoId]
+        ? <div class="thumb thumb-lg"><MediaFrame asset={media[photoId]} mode="box" ratio={1.6} kind="photo" alt="" name="Photo" width={400} /></div>
+        : <p class="empty">Photo not found.</p>}
+      {(payload.caption || before.caption) && <p class="hint">Caption: {payload.caption ?? before.caption}</p>}
+    </div>
+  )}
+
+  {r.status !== 'pending' && r.status !== 'withdrawn' && (
+    <p class="change-review">
+      {r.status === 'approved' ? 'Approved' : 'Not approved'}
+      {r.reviewer_name && <> by {r.reviewer_name}</>}
+      {r.reviewed_at && <> on {formatDateTime(r.reviewed_at)}</>}.
+      {r.review_note && <span class="note-text"> Note: “{r.review_note}”</span>}
+    </p>
+  )}
+
+  <slot />
+</article>
+
+<style>
+  .change { display: flex; flex-direction: column; gap: var(--pp-space-3); min-width: 0; }
+  .change + :global(.change) { border-top: 1px solid var(--pp-line); padding-top: var(--pp-space-4); margin-top: var(--pp-space-4); }
+  .change-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--pp-space-3); flex-wrap: wrap; }
+  .change-title { font-size: var(--pp-text-lg); margin: 0; overflow-wrap: anywhere; }
+  .change-biz { display: block; font-size: var(--pp-text-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--pp-green); font-family: var(--pp-font-body); }
+  .change-signed { margin: 0; font-size: var(--pp-text-sm); color: var(--pp-muted); overflow-wrap: anywhere; }
+  .checked { color: var(--pp-green); font-weight: 600; }
+  .change-table th[scope='row'] { white-space: nowrap; font-weight: 600; }
+  .change-table td { overflow-wrap: anywhere; min-width: 8rem; }
+  .change-table .was { color: var(--pp-muted); }
+  .change-table .now { font-weight: 600; }
+  .change-table tr.differs .now { background: var(--pp-lime-100); }
+  .empty { color: var(--pp-muted); font-style: italic; font-weight: 400; }
+  .thumb { width: 9rem; border: 1px solid var(--pp-line); border-radius: var(--pp-radius-inset); overflow: hidden; }
+  .thumb-lg { width: 16rem; max-width: 100%; }
+  .change-photo { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+  .change-photo .hint { margin: 0; }
+  .change-review { margin: 0; font-size: var(--pp-text-sm); padding: var(--pp-space-2) var(--pp-space-3); background: var(--pp-paper); border-radius: var(--pp-radius-inset); }
+  .note-text { display: block; margin-top: var(--pp-space-1); }
+</style>

@@ -183,7 +183,7 @@ export function humanError(error: { code?: string; message?: string } | null): s
 
   // Messages raised deliberately by our own triggers are already written
   // for a human. Pass them through.
-  if (/plan, which includes|cannot be deleted|are archived, not deleted/.test(message)) {
+  if (/plan, which includes|cannot be deleted|are archived, not deleted/.test(message) || /^PP\d{3}$/.test(error.code ?? '')) {
     return message.replace(/^.*?ERROR:\s*/i, '');
   }
 
@@ -204,6 +204,10 @@ export function humanError(error: { code?: string; message?: string } | null): s
   if (/towns_state_format|merchants_state_format/.test(message)) return 'State should be two letters, e.g. OH.';
   if (/_lat_range|_lng_range/.test(message)) return 'Latitude must be between -90 and 90, and longitude between -180 and 180.';
   if (error.code === '42501') return 'Your account does not have permission to make that change.';
+  if (/merchants_tagline_len/.test(message)) return 'Keep the tagline under 120 characters.';
+  if (/merchants_desc_len|deals_desc_len/.test(message)) return 'The description is too long. Shorten it and try again.';
+  if (/deals_terms_len/.test(message)) return 'The terms are too long. Keep them under 1,000 characters.';
+  if (error.code === '22007' || error.code === '22008') return 'One of the dates or times could not be read. Check it and try again.';
   if (/_len\b/.test(message)) return 'One of the fields is too long. Shorten it and try again.';
 
   return 'That could not be saved. Check the fields and try again.';

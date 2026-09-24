@@ -46,6 +46,16 @@ const usesGoogleFonts = !!fontHref(resolveTheme(settings['theme.tokens']));
       number, email address, town and any message. We use it only to reply.
     </p>
 
+    <h2>If you have a business login</h2>
+    <p>
+      People who manage a listing through the business portal have a login. We
+      store their email address, the name they sign changes with, a scrambled
+      copy of their special word (which nobody, including us, can read back),
+      and a record of every change they send: what it was, when, and whether we
+      approved it. We use this only to run the listing and to know who asked
+      for each change.
+    </p>
+
     <h2>What we count</h2>
     <p>
       To show participating businesses whether their listing is working, we count
@@ -66,7 +76,7 @@ const usesGoogleFonts = !!fontHref(resolveTheme(settings['theme.tokens']));
     <p>
       One cookie, named <code>pp_town</code>, remembers which town you chose so we
       can show you deals from there. It holds only the town’s name, lasts a year,
-      and is not used for advertising or tracking. Administrators who sign in to
+      and is not used for advertising or tracking. Administrators and business logins who sign in to
       manage the site also receive sign-in cookies. We use no advertising or
       analytics cookies, and no third-party trackers.
     </p>
@@ -78,6 +88,8 @@ const usesGoogleFonts = !!fontHref(resolveTheme(settings['theme.tokens']));
       {usesGoogleFonts
         ? ' Some lettering is loaded from Google Fonts, so Google receives your IP address when a page loads.'
         : ' Fonts are served from the site itself.'}
+      Business-portal emails (sign-in links and approval notices) are sent
+      through Resend, when that is switched on.
       When you tap Get directions, Google Maps opens and Google’s own
       privacy policy applies there. Links to a business’s website or social pages
       take you to sites we do not control.

@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AdminProfile } from './lib/admin';
+import type { PortalSession } from './lib/portal';
 
 declare global {
   namespace App {
@@ -10,6 +11,8 @@ declare global {
       profile: AdminProfile;
       /** Per-request cache. See lib/memo.ts. */
       memo: Map<string, Promise<unknown>>;
+      /** Set on /portal pages by the middleware. */
+      portal: PortalSession;
     }
   }
 }
