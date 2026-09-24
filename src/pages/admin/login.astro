@@ -18,17 +18,21 @@ if (Astro.request.method === 'GET') {
 }
 
 let notice: string | null = null;
+let submittedEmail = '';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const email = String(form.get('email') ?? '').trim().toLowerCase();
+  submittedEmail = email;
   const password = String(form.get('password') ?? '');
   const intent = String(form.get('intent') ?? 'signin');
 
-  if (intent === 'reset') {
+  if (intent === 'reset' && !email) {
+    error = 'Type your email address above, then press “Forgot your password?”.';
+  } else if (intent === 'reset') {
     // Always the same reply, whether or not the address exists. Confirming
     // which addresses are administrators would be a gift to anyone probing.
-    if (email) {
+    {
       const db = getAuthClient(Astro.cookies, Astro.request);
       await db.auth.resetPasswordForEmail(email, {
         redirectTo: `${import.meta.env.PUBLIC_SITE_URL}/admin/login`,
@@ -84,25 +88,26 @@ if (Astro.request.method === 'POST') {
 
       {notice && <p class="form-success" role="status">{notice}</p>}
 
+      {/* One form. "Sign in" is the default for Enter; the reset button sends
+          the same email field, so it works with no JavaScript at all. The
+          old separate reset form relied on a script this page never loaded,
+          and sent a blank address while claiming a link was on its way. */}
       <form method="post" class="stack">
-        <input type="hidden" name="intent" value="signin" />
         <div class="field">
           <label for="email">Email address</label>
           <input class="input" id="email" name="email" type="email"
-                 autocomplete="username" required autofocus />
+                 autocomplete="username" required autofocus
+                 value={Astro.request.method === 'POST' ? submittedEmail : ''} />
         </div>
         <div class="field">
           <label for="password">Password</label>
           <input class="input" id="password" name="password" type="password"
-                 autocomplete="current-password" required />
+                 autocomplete="current-password" />
         </div>
-        <button class="btn btn-primary btn-block" type="submit">Sign in</button>
-      </form>
-
-      <form method="post" class="reset-form">
-        <input type="hidden" name="intent" value="reset" />
-        <input type="hidden" name="email" value="" data-mirror-email />
-        <button class="btn btn-ghost btn-sm" type="submit">Forgot your password?</button>
+        <button class="btn btn-primary btn-block" type="submit" name="intent" value="signin">Sign in</button>
+        <button class="btn btn-ghost btn-sm reset-btn" type="submit" name="intent" value="reset" formnovalidate>
+          Forgot your password? Email me a reset link
+        </button>
       </form>
 
       <p class="note">
@@ -129,5 +134,5 @@ if (Astro.request.method === 'POST') {
   .login-card img { height: 36px; width: auto; }
   .login-card h1 { font-size: var(--pp-text-xl); margin: 0; }
   .note { font-size: var(--pp-text-xs); color: var(--pp-muted); margin: 0; }
-  .reset-form { margin-top: calc(-1 * var(--pp-space-2)); }
+  .reset-btn { align-self: center; }
 </style>

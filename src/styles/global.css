@@ -426,7 +426,7 @@ ul, ol { margin: 0; padding: 0; }
    ===================================================================== */
 
 .biz-grid { align-items: stretch; }
-.biz-card { position: relative; }
+.biz-card { position: relative; container-type: inline-size; }
 .biz-card:has(.stretch:focus-visible) { outline: 3px solid var(--pp-focus); outline-offset: 2px; }
 .biz-card .stretch:focus-visible { outline: none; }
 .biz-band { border-bottom: 1px solid var(--pp-line); }
@@ -438,7 +438,14 @@ ul, ol { margin: 0; padding: 0; }
 }
 .biz-head { display: flex; gap: var(--pp-space-3); align-items: center; }
 .biz-id { min-width: 0; flex: 1; }
-.biz-name { font-size: var(--pp-text-xl); margin: 0; line-height: 1.15; overflow-wrap: break-word; }
+.biz-name { font-size: var(--pp-text-xl); margin: 0; line-height: 1.15; overflow-wrap: break-word; hyphens: manual; }
+/* A narrow card (four across on a laptop) puts the logo above the name,
+   so a long name is never squeezed into a sliver beside a wide logo. */
+@container (max-width: 18rem) {
+  .biz-head { flex-wrap: wrap; }
+  .biz-id { flex-basis: 100%; }
+  .biz-name { font-size: var(--pp-text-lg); }
+}
 .biz-name a { color: var(--pp-heading); text-decoration: none; }
 .biz-card:hover .biz-name a { color: var(--pp-green); text-decoration: underline; text-decoration-thickness: 2px; }
 .biz-meta { margin: 0.2rem 0 0; font-size: var(--pp-text-sm); color: var(--pp-muted); }

@@ -35,6 +35,16 @@ test.describe('signing in', () => {
     await expect(page.getByRole('alert')).toHaveText('That email address and password do not match.');
   });
 
+  test('password reset sends the typed address, and asks for one if blank', async ({ page }) => {
+    await page.goto('/admin/login');
+    await page.getByRole('button', { name: /Forgot your password/ }).click();
+    await expect(page.getByRole('alert')).toContainText('Type your email address above');
+    await page.getByLabel('Email address').fill('owner@example.com');
+    await page.getByRole('button', { name: /Forgot your password/ }).click();
+    await expect(page.getByRole('status')).toHaveText('If that address has an account, a reset link is on its way.');
+    await expect(page.getByLabel('Email address')).toHaveValue('owner@example.com');
+  });
+
   test('a real account without admin rights gets nowhere', async ({ page }) => {
     await signIn(page, 'nobody@example.com');
     await expect(page.getByRole('alert')).toHaveText('That account does not have access.');

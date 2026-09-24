@@ -227,36 +227,6 @@ function initUploads() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Password reset                                                      */
-/*                                                                     */
-/* The reset button lives in its own form so Enter in the password box  */
-/* never triggers it. This copies whatever is typed in the email field  */
-/* across, so the reset works without asking for the address twice.     */
-/* ------------------------------------------------------------------ */
-
-function initResetMirror() {
-  const mirror = document.querySelector('[data-mirror-email]');
-  const email = document.getElementById('email');
-  if (!mirror || !email) return;
-
-  const sync = () => { mirror.value = email.value; };
-  email.addEventListener('input', sync);
-  sync();
-
-  const form = mirror.closest('form');
-  if (form) {
-    form.addEventListener('submit', (event) => {
-      sync();
-      if (!mirror.value.trim()) {
-        event.preventDefault();
-        email.focus();
-        alert('Type your email address in the box above first, then press "Forgot your password?".');
-      }
-    });
-  }
-}
-
-/* ------------------------------------------------------------------ */
 
 /* Slider labels update as you drag, so the number is not a mystery until
    you save. */
@@ -275,7 +245,6 @@ function initRangeLabels() {
    rest of the admin down with it. */
 [
   ['confirmations', initConfirmations],
-  ['password reset', initResetMirror],
   ['slider labels', initRangeLabels],
   ['image upload', initUploads],
   ['print', initPrint],

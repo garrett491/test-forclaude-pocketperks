@@ -97,7 +97,7 @@ const offerSchema = deal && merchant ? {
 
         <div class="deal-meta">
           {deal.badge && <span class={`badge badge-${deal.badge.style_key}`}>{deal.badge.label}</span>}
-          {expiry && <span class="expiry">{expiry}</span>}
+          {expiry && deal.ends_at && <span class="expiry" title={`Until ${formatDate(deal.ends_at)}`}>{expiry}</span>}
         </div>
 
         {art && (
@@ -113,12 +113,7 @@ const offerSchema = deal && merchant ? {
 
         {deal.description && <p class="desc">{deal.description}</p>}
 
-        {(deal.restrictions || deal.ends_at || deal.starts_at) && (
-          <ul class="limits list-plain" aria-label="Key details">
-            {deal.restrictions && <li>{deal.restrictions}</li>}
-            {deal.ends_at && <li>Valid until {formatDate(deal.ends_at)}</li>}
-          </ul>
-        )}
+        {deal.restrictions && <p class="limits">{deal.restrictions}</p>}
 
         {deal.coupon_code && (
           <div class="stitch-panel code-block">
@@ -238,8 +233,7 @@ const offerSchema = deal && merchant ? {
   .deal-art :global(.mf-fit) { --mf-max: min(70vh, 36rem); --mf-min: 10rem; }
   .desc { font-size: var(--pp-text-lg); }
 
-  .limits { display: flex; flex-direction: column; gap: var(--pp-space-1); margin: 0 0 var(--pp-space-3); font-size: var(--pp-text-sm); font-weight: 600; color: var(--pp-muted); }
-  .limits li::before { content: '• '; color: var(--pp-accent); }
+  .limits { margin: 0 0 var(--pp-space-3); font-size: var(--pp-text-sm); font-weight: 600; color: var(--pp-muted); }
 
   .code-block {
     display: flex; align-items: center; justify-content: space-between;

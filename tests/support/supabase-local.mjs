@@ -32,6 +32,9 @@ const JWT_SECRET = 'local-jwt-secret-for-tests-only';
 const STORAGE_DIR = process.env.SUPABASE_LOCAL_STORAGE || join(process.cwd(), '.supabase-local', 'storage');
 /** Set to simulate a paused or unreachable project: every call fails. */
 let outage = process.env.SUPABASE_LOCAL_OUTAGE === '1';
+/** Request counts, so tests can check how many queries a page makes. */
+let requestCount = 0;
+let requestLog = [];
 
 const pool = new pg.Pool({ connectionString: PGURL, max: 8 });
 // Rebuilding the test database force-closes idle connections. The pool
@@ -639,6 +642,12 @@ const server = http.createServer(async (req, res) => {
     outage = url.searchParams.get('on') === '1';
     return send(res, 200, { outage });
   }
+  if (url.pathname === '/__control/stats') {
+    const body = { count: requestCount, paths: requestLog };
+    if (url.searchParams.get('reset') === '1') { requestCount = 0; requestLog = []; }
+    return send(res, 200, body);
+  }
+  if (!url.pathname.startsWith('/__control')) { requestCount++; requestLog.push(`${req.method} ${url.pathname}${url.search.slice(0, 90)}`); }
   if (url.pathname === '/__control/reload') {
     await loadSchema();
     return send(res, 200, { ok: true });

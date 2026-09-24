@@ -4,7 +4,6 @@ import type { TownPageData } from '../lib/queries';
 import Carousel from './Carousel.astro';
 import BusinessCard from './BusinessCard.astro';
 import EmptyState from './EmptyState.astro';
-import NewsletterForm from './NewsletterForm.astro';
 
 /**
  * A town's front page: what is on offer here, best first.
@@ -33,7 +32,6 @@ const townParam = town ? `town=${town.slug}` : 'town=all';
 const carouselSeconds = Number(settings['carousel.seconds_per_slide'] ?? 8) || 8;
 const carouselAutoplay = settings['carousel.autoplay'] !== false;
 const how = blocks['home.how_it_works']?.payload as { steps?: { title: string; body: string }[] } | undefined;
-const newsletter = blocks['home.newsletter']?.payload as Record<string, string> | undefined;
 
 const businessCount = data.cards.length + data.quiet.length;
 const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from ${businessCount} local ${businessCount === 1 ? 'business' : 'businesses'}`;
@@ -145,18 +143,8 @@ const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from
   </section>
 )}
 
-<section class="wrap section">
-  <div class="signup-panel">
-    <NewsletterForm
-      source={town ? `town:${town.slug}` : 'home'}
-      settings={settings}
-      headline={newsletter?.headline}
-      body={newsletter?.body}
-      ctaLabel={newsletter?.cta_label}
-      finePrint={newsletter?.fine_print}
-    />
-  </div>
-</section>
+{/* The email signup lives in the footer, directly below. A second copy
+    here put two identical asks a scroll apart. */}
 
 <style>
   .town-hero { background: var(--pp-deep); color: var(--pp-white); }
@@ -206,12 +194,5 @@ const stats = `${data.dealCount} ${data.dealCount === 1 ? 'deal' : 'deals'} from
   .how-steps h3 { font-size: var(--pp-text-lg); margin-bottom: var(--pp-space-1); }
   .how-steps p { color: var(--pp-muted); font-size: var(--pp-text-sm); margin: 0; }
 
-  .signup-panel {
-    background: var(--pp-surface);
-    border: 1px solid var(--pp-line);
-    border-left: var(--pp-stitch);
-    border-radius: var(--pp-radius-card);
-    padding: var(--pp-space-5);
-    box-shadow: var(--pp-shadow-card);
-  }
+
 </style>

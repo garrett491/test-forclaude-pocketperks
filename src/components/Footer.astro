@@ -1,10 +1,12 @@
 ---
-import type { NavItem, SiteSettings } from '../lib/types';
+import type { NavItem, SiteSettings, ContentBlock } from '../lib/types';
 import type { Branding } from '../lib/branding';
 import NewsletterForm from './NewsletterForm.astro';
 
-interface Props { nav: NavItem[]; settings: SiteSettings; branding: Branding; }
-const { nav, settings, branding } = Astro.props;
+interface Props { nav: NavItem[]; settings: SiteSettings; branding: Branding; blocks?: Record<string, ContentBlock>; }
+const { nav, settings, branding, blocks = {} } = Astro.props;
+// The wording edited under Site content → Newsletter wording.
+const copy = (blocks['home.newsletter']?.payload ?? {}) as Record<string, string>;
 
 const footerNav = nav.filter((n) => n.location === 'footer');
 const sections = [...new Set(footerNav.map((n) => n.section ?? 'More'))];
@@ -48,7 +50,9 @@ const year = new Date().getFullYear();
       ))}
 
       <div class="footer-signup">
-        <NewsletterForm source="footer" settings={settings} compact={true} />
+        <NewsletterForm source="footer" settings={settings} compact={true}
+          headline={copy.headline || undefined} body={copy.body || undefined}
+          ctaLabel={copy.cta_label || undefined} finePrint={copy.fine_print || undefined} />
       </div>
     </div>
 

@@ -31,10 +31,17 @@ import type {
  * so running the migration takes effect without a redeploy.
  */
 let schemaCheck: { current: boolean; checkedAt: number } | null = null;
+let schemaCheckInFlight: Promise<boolean> | null = null;
 
 async function hasCurrentSchema(): Promise<boolean> {
   const fresh = schemaCheck && (schemaCheck.current || Date.now() - schemaCheck.checkedAt < 5 * 60_000);
   if (fresh) return schemaCheck!.current;
+  // Several queries start at once on a cold start; they share one check.
+  schemaCheckInFlight ??= checkSchema().finally(() => { schemaCheckInFlight = null; });
+  return schemaCheckInFlight;
+}
+
+async function checkSchema(): Promise<boolean> {
   const { error } = await publicDb.from('deals').select('restrictions').limit(1);
   if (error && error.code !== '42703' && error.code !== 'PGRST204') {
     // A genuine outage, not a schema question. Do not cache the answer.
@@ -89,18 +96,33 @@ export const PAGE_SIZE = 24;
 /* filter cannot fail that way, and it uses the indexes.                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Slug → id lookups are shared for a minute. One page view used to repeat
+ * the same town lookup four times; a slug's id never changes, and a town or
+ * category that is renamed or switched off drops out within a minute.
+ */
+const idCache = new Map<string, { at: number; value: Promise<string | null> }>();
+const ID_TTL_MS = 60_000;
+
+function cachedId(table: 'towns' | 'categories', slug: string): Promise<string | null> {
+  const key = `${table}:${slug}`;
+  const hit = idCache.get(key);
+  if (hit && Date.now() - hit.at < ID_TTL_MS) return hit.value;
+  const value = (async () => {
+    const data = must(`${table} lookup`, await publicDb.from(table).select('id').eq('slug', slug).maybeSingle());
+    return (data as { id: string } | null)?.id ?? null;
+  })();
+  value.catch(() => idCache.delete(key)); // never remember a failure
+  idCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
 async function categoryIdForSlug(slug?: string): Promise<string | null> {
-  if (!slug) return null;
-  const data = must('category lookup',
-    await publicDb.from('categories').select('id').eq('slug', slug).maybeSingle());
-  return (data as { id: string } | null)?.id ?? null;
+  return slug ? cachedId('categories', slug) : null;
 }
 
 async function townIdForSlug(slug?: string): Promise<string | null> {
-  if (!slug) return null;
-  const data = must('town lookup',
-    await publicDb.from('towns').select('id').eq('slug', slug).maybeSingle());
-  return (data as { id: string } | null)?.id ?? null;
+  return slug ? cachedId('towns', slug) : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -469,17 +491,28 @@ export interface TownPageData {
  * `townSlug` undefined means every town.
  */
 export async function getTownPageData(townSlug?: string): Promise<TownPageData> {
-  const [carousel, deals, quiet, categories] = await Promise.all([
+  const [carousel, deals, quiet] = await Promise.all([
     getCarouselMerchants(townSlug),
     listLiveDeals({ townSlug }),
     listMerchantsWithoutLiveDeals({ townSlug }),
-    getCategoriesWithCounts(townSlug),
   ]);
+
+  // The category chips come from the deals already loaded — every deal
+  // carries its business's category — rather than a second round of queries.
+  const byCategory = new Map<string, Category & { deal_count: number }>();
+  for (const deal of deals) {
+    const category = deal.merchant?.category;
+    if (!category) continue;
+    const entry = byCategory.get(category.id) ?? { ...category, deal_count: 0 };
+    entry.deal_count += 1;
+    byCategory.set(category.id, entry);
+  }
+
   return {
     carousel,
     cards: groupDealsByMerchant(deals),
     quiet,
-    categories: categories.filter((c) => c.deal_count > 0),
+    categories: [...byCategory.values()].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name)),
     dealCount: deals.length,
   };
 }

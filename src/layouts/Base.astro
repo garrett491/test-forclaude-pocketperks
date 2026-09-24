@@ -6,6 +6,9 @@ import { getSiteChrome, getTownsSafe } from '../lib/queries';
 import { resolveTheme, themeCss, fontHref } from '../lib/theme';
 import { getBranding } from '../lib/branding';
 import { resolveTownContext } from '../lib/location';
+// The same files global.css loads, so a preload is never a wasted download.
+import bodyFont from '@fontsource/dm-sans/files/dm-sans-latin-400-normal.woff2?url';
+import headingFont from '@fontsource/playfair-display/files/playfair-display-latin-700-normal.woff2?url';
 
 interface Props {
   title: string;
@@ -119,6 +122,15 @@ const safeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003
     <link rel="icon" href={branding.favicon} type={branding.faviconType} />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
+    {/* The bundled pair, fetched early so headings and text appear in the
+        right face straight away. Skipped if the Design page picked others. */}
+    {!googleFonts && (
+      <>
+        <link rel="preload" href={headingFont} as="font" type="font/woff2" crossorigin />
+        <link rel="preload" href={bodyFont} as="font" type="font/woff2" crossorigin />
+      </>
+    )}
+
     {/* Only when the Design page has chosen a font other than the bundled
         pair. The default look makes no request to Google at all. */}
     {googleFonts && (
@@ -143,7 +155,9 @@ const safeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003
     <main id="main" tabindex="-1">
       <slot />
     </main>
-    <Footer nav={nav} settings={settings} branding={branding} />
-    <script is:inline type="module" src="/js/site.js"></script>
+    <Footer nav={nav} settings={settings} branding={branding} blocks={blocks} />
+    {/* Bundled by Astro: minified, fingerprinted, cached for a year, and
+        always an external file, so script-src 'self' needs no exceptions. */}
+    <script src="../scripts/site.js"></script>
   </body>
 </html>

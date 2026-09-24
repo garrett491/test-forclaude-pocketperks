@@ -74,12 +74,14 @@ const Wrapper = compact ? 'div' : 'section';
 </Wrapper>
 
 <style>
-  .newsletter { display: flex; flex-direction: column; gap: var(--pp-space-2); }
+  .newsletter { display: flex; flex-direction: column; gap: var(--pp-space-2); container-type: inline-size; }
   .nl-title { font-size: var(--pp-text-lg); margin: 0; }
   .nl-body { font-size: var(--pp-text-sm); margin: 0; opacity: 0.9; }
   .nl-form { display: flex; flex-direction: column; gap: var(--pp-space-3); margin-top: var(--pp-space-2); }
-  @media (min-width: 30rem) {
-    .nl-form { display: grid; grid-template-columns: 1fr auto; gap: var(--pp-space-2); }
+  /* Side by side only when this form itself has room — in a narrow footer
+     column the field would otherwise shrink to nothing next to the button. */
+  @container (min-width: 22rem) {
+    .nl-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--pp-space-2); }
     .nl-form .field { grid-column: 1; }
     .nl-form button { grid-column: 2; }
     .nl-fine, .nl-status { grid-column: 1 / -1; }
