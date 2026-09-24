@@ -162,8 +162,10 @@ const failing = checks.filter((c) => c.verdict!.tone !== 'ok');
     <section class="panel">
       <h2>Fonts</h2>
       <p class="panel-hint">
-        Ten families, tested together. A free-text box would let a typo render
-        the whole site in Times New Roman with nothing to warn you.
+        Ten families, tested together. Playfair Display and DM Sans are served by
+        the site itself. Any other choice is loaded from Google Fonts, which is a
+        little slower and shares visitors’ IP addresses with Google — the privacy
+        page updates itself to say so.
       </p>
       <div class="form-grid cols-2">
         <div class="field">
