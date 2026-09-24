@@ -102,7 +102,9 @@ export const PAGE_SIZE = 24;
  * category that is renamed or switched off drops out within a minute.
  */
 const idCache = new Map<string, { at: number; value: Promise<string | null> }>();
-const ID_TTL_MS = 60_000;
+// Overridable for the test suite, which rebuilds the database (and so every
+// id) between runs. In production a slug's id never changes.
+const ID_TTL_MS = Number(process.env.PP_ID_CACHE_TTL_MS ?? 60_000);
 
 function cachedId(table: 'towns' | 'categories', slug: string): Promise<string | null> {
   const key = `${table}:${slug}`;

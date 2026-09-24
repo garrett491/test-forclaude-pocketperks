@@ -24,13 +24,13 @@ stop_one() {
 case "${1:-}" in
   start)
     mode="${2:-dev}"
-    stop_one supabase; stop_one web
+    bash "$0" stop >/dev/null
     setsid nohup node tests/support/supabase-local.mjs > "$STATE/supabase.log" 2>&1 &
     echo $! > "$STATE/supabase.pid"
     if [[ "$mode" == "preview" ]]; then
-      setsid nohup node --env-file=.env tests/support/serve-build.mjs > "$STATE/web.log" 2>&1 &
+      PP_ID_CACHE_TTL_MS=0 setsid nohup node --env-file=.env tests/support/serve-build.mjs > "$STATE/web.log" 2>&1 &
     else
-      setsid nohup npx astro dev --port 4321 --host 127.0.0.1 > "$STATE/web.log" 2>&1 &
+      PP_ID_CACHE_TTL_MS=0 setsid nohup npx astro dev --port 4321 --host 127.0.0.1 > "$STATE/web.log" 2>&1 &
     fi
     echo $! > "$STATE/web.pid"
     for _ in $(seq 1 60); do
@@ -43,6 +43,11 @@ case "${1:-}" in
     ;;
   stop)
     stop_one web; stop_one supabase
+    # Belt and braces: anything still holding the test ports.
+    for port in 4321 54321; do
+      pid=$(lsof -ti tcp:$port 2>/dev/null || true)
+      [[ -n "$pid" ]] && kill $pid 2>/dev/null || true
+    done
     echo "services stopped"
     ;;
   *)

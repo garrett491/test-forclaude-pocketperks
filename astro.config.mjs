@@ -1,6 +1,17 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import netlify from '@astrojs/netlify';
+import { loadEnv } from 'vite';
+
+// In `astro dev` only: make the server-only secrets in .env (the service-role
+// key, the session salt) visible to process.env, as Netlify does in
+// production. Builds are untouched, so no secret is ever written into the
+// build output.
+if (process.argv.includes('dev')) {
+  for (const [key, value] of Object.entries(loadEnv('development', process.cwd(), ''))) {
+    if (!key.startsWith('PUBLIC_') && process.env[key] === undefined) process.env[key] = value;
+  }
+}
 
 // Server output with per-page opt-in to prerendering.
 //
