@@ -47,14 +47,17 @@ Supabase dashboard in Step 2, kept alongside the code so it does not get lost.
 Follow `supabase/README.md`. In short:
 
 1. Create a Supabase project (Free tier, region `us-east-1`).
-2. SQL Editor → run the nine files in order:
+2. SQL Editor → run the ten files in order:
    `0001_foundation` → `0002_tables` → `0003_rls` → `0004_analytics` →
    `0005_storage` → `seed.sql` → `0006_fixes` →
-   `0007_gallery_theme_branding` → `0008_location_carousel`.
+   `0007_gallery_theme_branding` → `0008_location_carousel` →
+   `0009_production_pass`.
    Order matters. Each one assumes the previous ran.
 
-   **Already set up?** Run `0006_fixes.sql` on its own. It is additive and
-   safe to run more than once — nothing is dropped and no data is lost.
+   **Already set up?** Run whichever of `0006`–`0009` you have not run yet,
+   in order. Each is additive and safe to run more than once — nothing is
+   dropped and no data is lost. If you are not sure whether you ran one,
+   run it again.
 3. Authentication → Users → Add user. Use a real address and a password from
    a password manager.
 4. Copy that user's UUID and run:
@@ -93,6 +96,8 @@ Environment variables. Values come from Supabase under Project Settings → API.
 | `PUBLIC_SITE_URL` | `https://yourpocketperks.com` | Used for canonical URLs and share links |
 | `SUPABASE_SERVICE_ROLE_KEY` | `service_role` `secret` key | **Server only. Never rename this with a PUBLIC_ prefix.** |
 | `SESSION_SALT` | 32 random characters | Any long random string; generate one and forget it |
+
+Node 22 is selected in `netlify.toml`; you do not need to set it.
 
 The two `PUBLIC_` values appear in your page source. That is expected. They
 identify the `anon` role, whose entire capability is defined by the security

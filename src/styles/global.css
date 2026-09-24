@@ -68,13 +68,14 @@ ul, ol { margin: 0; padding: 0; }
 }
 
 .skip-link {
-  position: absolute; left: var(--pp-space-3); top: -3rem;
+  /* Moved up by its own height, so it hides fully at any text size. */
+  position: absolute; left: var(--pp-space-3); top: 0; transform: translateY(-110%);
   z-index: 100; padding: var(--pp-space-3) var(--pp-space-4);
   background: var(--pp-deep); color: var(--pp-white);
   border-radius: var(--pp-radius-inset); font-weight: 600;
-  transition: top var(--pp-duration) var(--pp-ease);
+  transition: transform var(--pp-duration) var(--pp-ease);
 }
-.skip-link:focus { top: var(--pp-space-3); color: var(--pp-white); }
+.skip-link:focus { transform: translateY(var(--pp-space-3)); color: var(--pp-white); }
 
 /* =====================================================================
    Layout primitives

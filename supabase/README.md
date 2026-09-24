@@ -32,6 +32,16 @@ SQL Editor → paste each file → Run, in this order:
 | 4 | `migrations/0004_analytics.sql` | Rollup, pruning, merchant reporting functions |
 | 5 | `migrations/0005_storage.sql` | The `merchant-media` bucket and its policies |
 | 6 | `seed.sql` | Carrollton, categories, badges, site copy, navigation |
+| 7 | `migrations/0006_fixes.sql` | Slug autofill for towns/categories, Home link, manual unsubscribe |
+| 8 | `migrations/0007_gallery_theme_branding.sql` | Photo gallery, theme settings, branding slots, Malvern |
+| 9 | `migrations/0008_location_carousel.sql` | Carousel speed/autoplay settings, area name, empty states |
+| 10 | `migrations/0009_production_pass.sql` | Carousel switch per business, short deal limits, image copies for phones, signup consent records, Terms/Accessibility links, town-chooser wording, expired deals no longer count against the plan |
+
+**Already running an older version?** Run any of 0006–0009 you have not run
+yet, in order. Every one is additive and safe to run more than once —
+nothing is dropped and no data is lost. The website keeps working before
+0009 is applied (with the new features switched off), so deploying the code
+first is safe; run 0009 straight after.
 
 Order matters: `is_admin()` cannot be created before the `profiles` table
 exists, and `0005` cannot create its policies before `is_admin()` exists.
@@ -181,7 +191,11 @@ PGHOST=/tmp PGPORT=5433 bash tests/run.sh
 ```
 
 The runner drops the scratch database, applies every migration, runs the
-seed **twice** to prove idempotency, and asserts all 32 guarantees.
+seed and the newest migrations **twice** to prove they are safe to re-run,
+and asserts every guarantee. (From the project root: `npm run test:db`.)
+
+The full browser suite — the real site against these migrations — is
+described in `tests/README.md`.
 
 `tests/00_supabase_stub.sql` fakes the `auth` and `storage` schemas so the
 migrations can run outside Supabase. Never run it against a real project.
@@ -191,7 +205,8 @@ migrations can run outside Supabase. Never run it against a real project.
 ## Notes on decisions you may want to revisit
 
 **Deals are limited by plan tier at the database level.** A Standard
-merchant physically cannot have three active deals; the insert fails with a
+merchant physically cannot have three live deals (deals past their end date
+no longer count); the insert fails with a
 message naming the merchant, their plan, and the fix. If you want to comp
 someone extra deals, change their tier — that keeps the plan and the
 delivered product in sync, which is exactly what broke on the old site.
@@ -206,8 +221,9 @@ core site settings can be edited and switched off but not removed. A bad
 click costs you a minute, not your navigation.
 
 **No IP address is stored anywhere.** `session_hash` is a salted digest
-computed in the Netlify Function; rotate `SESSION_SALT` daily and the hash
-cannot follow anyone across days. This keeps the analytics useful for
+computed in the Netlify Function from the salt, the date, the connection
+and the browser, so the same visitor hashes differently each day and the
+hash cannot follow anyone across days. This keeps the analytics useful for
 deduplication and useless for tracking individuals.
 
 **`newsletter.mode` in `site_settings` is the ActiveCampaign switch.** Set it

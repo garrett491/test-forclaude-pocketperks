@@ -328,4 +328,73 @@ select tests.assert(
   (select unsubscribe_token is not null from public.subscribers where source = 'footer'),
   '8.4 every subscriber gets an unsubscribe token at insert time');
 
+-- =====================================================================
+-- 9. Production pass (0009)
+-- =====================================================================
+
+insert into public.merchants (name, category_id, town_id, phone_display, status, tier)
+select 'Limit Check Diner',
+       (select id from public.categories where slug = 'food-drink'),
+       (select id from public.towns where slug = 'carrollton'),
+       '(330) 555-0177', 'active', 'standard'
+where not exists (select 1 from public.merchants where name = 'Limit Check Diner');
+
+do $$
+declare m uuid;
+begin
+  select id into m from public.merchants where name = 'Limit Check Diner';
+  insert into public.deals (merchant_id, headline, status) values (m, 'Old deal that has run its course', 'active');
+  insert into public.deals (merchant_id, headline, status) values (m, 'Current deal still running', 'active');
+  -- The first one ends. It stays "active" in the table but is no longer on the site.
+  update public.deals set starts_at = null, ends_at = now() - interval '1 day'
+   where merchant_id = m and headline = 'Old deal that has run its course';
+  insert into public.deals (merchant_id, headline, status) values (m, 'Replacement for the ended deal', 'active');
+end $$;
+
+select tests.assert(
+  (select count(*) from public.deals d join public.merchants m on m.id = d.merchant_id
+    where m.name = 'Limit Check Diner' and d.status = 'active'
+      and (d.ends_at is null or d.ends_at > now())) = 2,
+  '9.1 an ended deal does not use up a plan slot');
+
+select tests.assert_blocked($$
+  insert into public.deals (merchant_id, headline, status)
+  values ((select id from public.merchants where name = 'Limit Check Diner'),
+          'A third live deal on Standard', 'active')$$,
+  '9.2 the plan limit still applies to live deals');
+
+select tests.assert(
+  (select count(*) from information_schema.columns
+    where table_schema = 'public'
+      and (table_name, column_name) in (('merchants','show_in_carousel'), ('deals','restrictions'),
+                                        ('media','variants'), ('subscribers','consent_text'),
+                                        ('subscribers','consent_at'), ('subscribers','consent_path'))) = 6,
+  '9.3 carousel switch, deal limits, image copies and consent columns exist');
+
+-- A real signed-in account that is not in profiles is treated like the public.
+insert into auth.users (id, email)
+values ('22222222-2222-2222-2222-222222222222', 'nobody@example.com')
+on conflict do nothing;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', false);
+
+select tests.assert_blocked(
+  $$insert into public.merchants (name, category_id, town_id, phone_display, status)
+    values ('Not An Admin Co', (select id from public.categories limit 1),
+            (select id from public.towns limit 1), '3305550112', 'active')$$,
+  '9.4 a signed-in account without a profiles row cannot create a business');
+
+select tests.assert_blocked(
+  $$insert into public.profiles (id, role, display_name)
+    values ('22222222-2222-2222-2222-222222222222', 'owner', 'Self-promoted')$$,
+  '9.5 nobody can make themselves an administrator');
+
+select tests.assert(
+  (select count(*) from public.subscribers) = 0,
+  '9.6 a signed-in non-admin cannot read the subscriber list');
+
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+
 do $$ begin raise notice '--- all guarantees hold ---'; end $$;
